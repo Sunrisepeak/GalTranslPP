@@ -93,7 +93,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:/Qt
-          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v2
+          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v3
 
       # aqtinstall 3.3.0 does not know 6.11's per-architecture repository layout
       # (qt6_6111/qt6_6111_msvc2022_64/Updates.xml): qtbase and qttools (lupdate, lrelease) straight
@@ -118,15 +118,15 @@ jobs:
               print("downloading", archive, flush=True)
               urllib.request.urlretrieve(f"{base}/{package}/{stamp}{archive}", f"C:/Qt/archives/{archive}")
           EOF
-          for archive in C:/Qt/archives/*.7z; do 7z x -y -bso0 -oC:/Qt "$archive"; done
+          # The archives are laid out from the install prefix (bin/, include/, lib/).
+          for archive in C:/Qt/archives/*.7z; do 7z x -y -bso0 "-oC:/Qt/$QT_VERSION/msvc2022_64" "$archive"; done
           rm -rf C:/Qt/archives
 
       - name: Point the build scripts at Qt
         shell: bash
         run: |
           set -euo pipefail
-          lrelease=$(find /c/Qt -name lrelease.exe -path '*msvc2022_64*' | head -n 1)
-          root=$(cd "$(dirname "$lrelease")/.." && pwd -W)
+          root="C:/Qt/$QT_VERSION/msvc2022_64"
           ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/include/QtCore/QString" "$root/lib/Qt6Core.lib" > /dev/null
           printf '%s\n' "$root" > mcpp-build-scripts/qt-root.txt
           cat mcpp-build-scripts/qt-root.txt
