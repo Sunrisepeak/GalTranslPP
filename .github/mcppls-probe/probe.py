@@ -45,6 +45,22 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=1, ensure_ascii=False), encoding="utf-8")
 
 
+def crash_files(text):
+    """clangd names the file it was working on when it crashed (its crash context)."""
+    files = re.findall(r"Signalled (?:during|while)[^\n]*\n[^\n]*Filename: *([^\n]+)", text)
+    return sorted({item.strip() for item in files})
+
+
+def scan_reasons(text):
+    """Why module scanning failed, grouped: the first diagnostic line after each failure."""
+    reasons = {}
+    for match in re.finditer(r"Scanning modules dependencies for (\S+) failed: ([^\n]*)\n?([^\n]*)", text):
+        reason = (match.group(2).strip() or match.group(3).strip())
+        reason = re.sub(r"^.*?(fatal error|error): ", r"\1: ", reason)[:140]
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return dict(sorted(reasons.items(), key=lambda item: -item[1])[:8])
+
+
 def scan_text(text):
     counts = {name: len(pattern.findall(text)) for name, pattern in {**SIGNALS, **CRASH_MARKERS}.items()}
     codes = sorted(set(re.findall(r"Exception Code: *(0x[0-9A-Fa-f]+)", text)))
@@ -301,6 +317,8 @@ def session(args):
         "hoverProvidedBy": sum(1 for item in timeline if "provided by" in item["hoverText"]),
         "stderr": counts,
         "exceptionCodes": codes,
+        "crashFiles": crash_files(stderr),
+        "scanFailureReasons": scan_reasons(stderr),
         "moduleNotFound": sum(1 for items in diagnostics.values() for message in items if re.search(r"[Mm]odule '[^']+' not found", message)),
         "diagnostics": diagnostics,
     }
@@ -438,6 +456,11 @@ def summarize(args):
         lines.append(f"| {summary_path.parent.name} | {exited} | {data.get('exitCodeHex')} {' '.join(data.get('exceptionCodes', []))} | {hover} | "
                      f"{data.get('moduleNotFound', '-')} | {stderr.get('scan_failed', 0)} | {stderr.get('lto_requires_lld', 0)} | {crash} | {report.get('recentExits', '-')} | "
                      f"{', '.join(report.get('issueCodes', [])) or '-'} |")
+    lines += ["", "**Where clangd crashed, and why scanning failed**", ""]
+    for summary_path in sorted(out.glob("*/summary.json")):
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        if data.get("crashFiles") or data.get("scanFailureReasons"):
+            lines.append(f"- {summary_path.parent.name}: crashed in {data.get('crashFiles') or '-'}; scan failures {data.get('scanFailureReasons') or '-'}")
     for stats_path in sorted(out.glob("*/cdb-stats.json")):
         data = json.loads(stats_path.read_text(encoding="utf-8"))
         lines += ["", f"**{stats_path.parent.name}**: {data['entries']} entries, {data['withFlto']} with -flto, {data['withC']} with -c, targets {data['targets']}"]

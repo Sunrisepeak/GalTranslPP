@@ -93,12 +93,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:/Qt
-          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v3
+          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v4
 
       # aqtinstall 3.3.0 does not know 6.11's per-architecture repository layout
-      # (qt6_6111/qt6_6111_msvc2022_64/Updates.xml): qtbase and qttools (lupdate, lrelease) straight
-      # from the repository the online installer reads.
-      - name: Qt ${{ env.QT_VERSION }} msvc2022_64 (qtbase, qttools)
+      # (qt6_6111/qt6_6111_msvc2022_64/Updates.xml): the base package's archives straight from the
+      # repository the online installer reads -- all of them but the documentation. qtdeclarative
+      # is not optional: lupdate.exe imports Qt6Qml.dll.
+      - name: Qt ${{ env.QT_VERSION }} msvc2022_64 (the base package)
         if: steps.qt.outputs.cache-hit != 'true'
         shell: bash
         run: |
@@ -113,7 +114,7 @@ jobs:
           entry = next(p for p in updates.iter("PackageUpdate") if p.findtext("Name") == package)
           stamp = entry.findtext("Version")
           for archive in (item.strip() for item in entry.findtext("DownloadableArchives").split(",")):
-              if not archive.startswith(("qtbase-", "qttools-")):
+              if archive.startswith("qtdoc-"):
                   continue
               print("downloading", archive, flush=True)
               urllib.request.urlretrieve(f"{base}/{package}/{stamp}{archive}", f"C:/Qt/archives/{archive}")
@@ -127,7 +128,8 @@ jobs:
         run: |
           set -euo pipefail
           root="C:/Qt/$QT_VERSION/msvc2022_64"
-          ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/include/QtCore/QString" "$root/lib/Qt6Core.lib" > /dev/null
+          ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/bin/Qt6Qml.dll" "$root/include/QtCore/QString" "$root/lib/Qt6Core.lib" > /dev/null
+          "$root/bin/lupdate.exe" -version
           printf '%s\n' "$root" > mcpp-build-scripts/qt-root.txt
           cat mcpp-build-scripts/qt-root.txt
 
