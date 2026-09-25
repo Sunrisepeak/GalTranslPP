@@ -35,8 +35,7 @@ include_dirs = [
   ".",
   "../3rdParty/3rdModule",
   "../3rdParty/pybind11/include",
-  "../3rdParty/pybind11/Python/include",
-  "../vcpkg_installed/gpp-x64-windows-release/include"
+  "../3rdParty/pybind11/Python/include"
 ]
 ldflags = [
   "-L../3rdParty/pybind11/bin",
@@ -45,6 +44,14 @@ ldflags = [
   "-luser32",
   "-loleaut32"
 ]
+
+# bit7z loads 7-Zip's library at run time; the official 7z.dll is part of the
+# xim:7zip payload on Windows, and the build program deploys it.
+[target.windows.xlings.workspace]
+"xim:7zip" = ">=26.02"
+
+[build-dependencies.mcpp]
+plugins = { version = "0.13.0", features = ["deps-vcpkg", "rules-qt-xim"], host-module = true, tools = ["mcpp-deps"] }
 
 [targets.GalTranslPP]
 kind = "lib"

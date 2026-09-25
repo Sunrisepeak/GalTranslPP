@@ -1,9 +1,8 @@
 #pragma once
 
-// Shared build-graph actions for the three executable workspace members.
-// This header is included only by build.mcpp programs (which import std and mcpp).
-
-#include "mcpp_translations.hpp"
+// The release layout of the three executable workspace members: Release/GPPCLI,
+// Release/GPPGUI, Release/GUICORE and the optional private mirrors. Included
+// only by build.mcpp programs, after gpp_deps.hpp.
 
 struct executable_actions {
     using path = std::filesystem::path;
@@ -11,8 +10,11 @@ struct executable_actions {
     path project = path(mcpp::manifest_dir());
     path workspace = project.parent_path();
     path release = workspace / "Release";
-    path qt = qt_root_path();
-    path vcpkg = workspace / "vcpkg_installed" / "gpp-x64-windows-release";
+    path qt = mcpp::rules::qt::root();
+    path vcpkg = workspace / "vcpkg_installed" / gpp_triplet;
+    // Further directories the runtime closure is read from: a CMake subproject's
+    // installed `bin/` (GPPGUI adds ElaWidgetTools').
+    std::vector<path> extra_runtime_dirs;
     std::string target;
     std::string target_file;
     unsigned next_action = 0;
@@ -47,18 +49,6 @@ struct executable_actions {
             return {};
         }
         return destination;
-    }
-
-    bool ready() const {
-        if (qt.empty() || !std::filesystem::exists(qt / "bin" / "lrelease.exe")) {
-            std::println(stderr, "Qt tools missing; check mcpp-build-scripts/qt-root.txt");
-            return false;
-        }
-        if (!std::filesystem::is_directory(vcpkg / "bin")) {
-            std::println(stderr, "vcpkg runtime bin missing; install project dependencies with the gpp-x64-windows-release triplet");
-            return false;
-        }
-        return true;
     }
 
     void copy(std::string source, const path& destination) {
@@ -110,17 +100,23 @@ struct executable_actions {
               .arg("--manifest").arg(output.c_str())
               .arg("--dest").arg(dest.c_str())
               .input(exe.c_str()).input(tool).output(output.c_str());
-        const std::vector<path> search_dirs{
+        // The vcpkg prefix and the Qt SDK are installed by the build itself
+        // (deps-vcpkg, rules-qt-xim), and 7z.dll ships in the xim:7zip payload.
+        std::vector<path> search_dirs{
             vcpkg / "bin",
+            qt / "bin",
             workspace / "3rdParty" / "pybind11" / "bin",
-            workspace / "3rdParty" / "ElaWidgetTools" / "Install" /
-                "ElaWidgetTools" / "bin",
-            workspace / "3rdParty"
+            path(mcpp::xpkg_dir("xim", "7zip")),
         };
+        search_dirs.insert(search_dirs.end(), extra_runtime_dirs.begin(), extra_runtime_dirs.end());
+        // Every directory is passed, present or not: on a first build the vcpkg
+        // prefix is installed by an action after this program has run, and
+        // runtime-stage skips a directory that does not exist.
         for (const auto& dir : search_dirs) {
-            if (!std::filesystem::is_directory(dir)) continue;
+            if (dir.empty()) continue;
             const auto dir_arg = dir.lexically_normal().string();
             action.arg("--search").arg(dir_arg.c_str());
+            if (!std::filesystem::is_directory(dir)) continue;
             for (const auto& entry : std::filesystem::directory_iterator(dir)) {
                 if (!entry.is_regular_file() || entry.path().extension() != ".dll") continue;
                 const auto file = entry.path().lexically_normal().string();
@@ -136,6 +132,24 @@ struct executable_actions {
         return true;
     }
 
+    // The Qt plugins Qt loads by path, which no import table names; the part of
+    // windeployqt's work runtime-stage cannot see. The release plugin only: the
+    // SDK ships `qwindowsd.dll` beside `qwindows.dll`.
+    void copy_qt_plugins(const path& destination) {
+        for (const char* dir : {"platforms", "styles", "imageformats"}) {
+            std::error_code error;
+            for (const auto& entry : std::filesystem::directory_iterator(qt / "plugins" / dir, error)) {
+                const auto file = entry.path();
+                if (!entry.is_regular_file() || file.extension() != ".dll") continue;
+                const auto stem = file.stem().string();
+                if (stem.ends_with("d") &&
+                    std::filesystem::exists(file.parent_path() / (stem.substr(0, stem.size() - 1) + ".dll")))
+                    continue;
+                copy_file(file, destination / dir / file.filename());
+            }
+        }
+    }
+
     void copy_translation_files(std::string_view member, const path& qm,
                                 const path& destination) {
         const auto translations = destination / "translations";
@@ -146,19 +160,10 @@ struct executable_actions {
         }
     }
 
-    path prepare_translations(std::string_view member) const {
-        const auto ts = project / (member == "GPPCLI" ? "qt_gppcli_en.ts" :
-                                   member == "GPPGUI" ? "qt_gppgui_en.ts" :
-                                                        "qt_gppupdater_en.ts");
-        return qt_translation(project, ts,
-                              path(mcpp::out_dir()) / (ts.stem().string() + ".qm"));
-    }
-
     bool publish_release(std::string_view member, const path& own_qm) {
         if (own_qm.empty()) return false;
         const auto profile = std::string_view(mcpp::profile());
         if (profile != "release" && profile != "fast-release") return true;
-        if (!ready()) return false;
         const bool cli = member == "GPPCLI";
         const bool gui = member == "GPPGUI";
         const auto base = release / (cli ? "GPPCLI" : "GPPGUI");
@@ -186,66 +191,8 @@ struct executable_actions {
 
         for (const auto& destination : destinations)
             copy_translation_files(member, own_qm, destination.first);
-        return true;
-    }
-
-    bool generate_gui_sources() {
-        const auto moc = qt / "bin" / "moc.exe";
-        const auto rcc = qt / "bin" / "rcc.exe";
-        if (!std::filesystem::is_regular_file(moc) || !std::filesystem::is_regular_file(rcc)) {
-            std::println(stderr, "Qt moc/rcc missing under {}", qt.string());
-            return false;
-        }
-        mcpp::rerun_if_changed_glob("**/*.h");
-        mcpp::rerun_if_changed_glob("Resource/**");
-        std::vector<path> headers;
-        for (std::filesystem::recursive_directory_iterator it(project), end;
-             it != end; ++it) {
-            if (it.depth() == 0 && it->is_directory() &&
-                (it->path().filename() == "target" ||
-                 it->path().filename() == "mcpp-generated")) {
-                it.disable_recursion_pending();
-                continue;
-            }
-            if (!it->is_regular_file() || it->path().extension() != ".h") continue;
-            mcpp::rerun_if_changed(it->path().string().c_str());
-            std::ifstream input(it->path());
-            const std::string content(std::istreambuf_iterator<char>{input}, {});
-            if (content.find("Q_OBJECT") != std::string::npos ||
-                content.find("Q_GADGET") != std::string::npos ||
-                content.find("Q_NAMESPACE") != std::string::npos)
-                headers.push_back(it->path());
-        }
-        std::ranges::sort(headers);
-        for (const auto& header : headers) {
-            const auto output = path(mcpp::out_dir()) / ("moc_" + header.stem().string() + ".cpp");
-            const auto in = header.string();
-            const auto out = output.string();
-            const auto tool = moc.string();
-            const auto id = "moc-" + header.stem().string();
-            mcpp::action action;
-            action.id = id.c_str();
-            action.role = "source";
-            action.arg(tool.c_str()).arg(in.c_str()).arg("-o").arg(out.c_str())
-                  .input(in.c_str()).output(out.c_str()).submit();
-        }
-        const auto qrc = project / "GPPGUI.qrc";
-        const auto output = path(mcpp::out_dir()) / "qrc_GPPGUI.cpp";
-        const auto in = qrc.string();
-        const auto out = output.string();
-        const auto tool = rcc.string();
-        mcpp::action action;
-        action.id = "rcc-GPPGUI";
-        action.role = "source";
-        action.arg(tool.c_str()).arg(in.c_str()).arg("-o").arg(out.c_str())
-              .input(in.c_str()).output(out.c_str());
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(project / "Resource")) {
-            if (entry.is_regular_file()) {
-                const auto resource = entry.path().string();
-                action.input(resource.c_str());
-            }
-        }
-        action.submit();
+        if (member != "GPPCLI")
+            for (const auto& destination : destinations) copy_qt_plugins(destination.first);
         return true;
     }
 };

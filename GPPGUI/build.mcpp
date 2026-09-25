@@ -1,12 +1,35 @@
 import std;
 import mcpp;
+import mcpp.deps.vcpkg;
+import mcpp.deps.cmake;
+import mcpp.rules.qt;
 
-#include "../mcpp-build-scripts/qt_config.hpp"
+#include "../mcpp-build-scripts/gpp_deps.hpp"
 #include "../mcpp-build-scripts/mcpp_actions.hpp"
 
 int main() {
     track_build_scripts();
-    if (configure_qt({"Qt6Core", "Qt6Gui", "Qt6Network", "Qt6Widgets"}) != 0) return 1;
+    if (!use_vcpkg()) return 1;
+
+    mcpp::rules::qt::options qt;
+    qt.modules = {"Core", "Gui", "Network", "Widgets"};
+    qt.deploy_plugins = {"platforms", "styles", "imageformats"};
+    qt.resources = {"GPPGUI.qrc"};
+    qt.i18n = gpp_translations("qt_gppgui_en.ts");
+    if (!mcpp::rules::qt::compile(qt)) return 1;
+
+    // ElaWidgetTools, the widget library the GUI is built on, as a CMake
+    // subproject configured against the same Qt SDK.
+    mcpp::deps::cmake::options ela;
+    ela.source = "../3rdParty/ElaWidgetTools";
+    ela.cache_args = {"-DQT_SDK_DIR=" + mcpp::rules::qt::root(),
+                      "-DELAWIDGETTOOLS_BUILD_EXAMPLE=OFF"};
+    ela.dirs = {.include = "ElaWidgetTools/include", .lib = "ElaWidgetTools/lib",
+                .bin = "ElaWidgetTools/bin"};
+    ela.libraries = {"ElaWidgetTools"};
+    ela.shared = true;
+    const auto elaPrefix = mcpp::deps::cmake::use(ela);
+    if (!elaPrefix) return 1;
 
     const char* updater = mcpp::dep_bin("gpp.updater", "Updater");
     if (!updater || !*updater) {
@@ -14,9 +37,8 @@ int main() {
         return 1;
     }
     executable_actions actions("GalTranslPP_GUI");
-    if (!actions.generate_gui_sources()) return 1;
-    const auto qm = actions.prepare_translations("GPPGUI");
-    if (!actions.publish_release("GPPGUI", qm)) return 1;
+    actions.extra_runtime_dirs.push_back(elaPrefix.bin);
+    if (!actions.publish_release("GPPGUI", gpp_qm("qt_gppgui_en"))) return 1;
     if (const auto profile = std::string_view(mcpp::profile());
         profile == "release" || profile == "fast-release") {
         actions.copy(updater, actions.release / "GPPGUI" / "Updater.exe");

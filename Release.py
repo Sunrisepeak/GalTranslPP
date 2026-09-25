@@ -31,13 +31,8 @@ def main() -> None:
         PYTHON_ARCHIVE, "GlobalConfig.toml", "mecab", "Python-3.12.10-embed-amd64",
     )
 
-    archive_dll = ROOT / "3rdParty" / "7z.dll"
-    if not archive_dll.is_file():
-        raise FileNotFoundError(f"Missing release input: {archive_dll}")
-    for member in ("GPPCLI", "GPPGUI", "GUICORE"):
-        destination = RELEASE / member
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(archive_dll, destination / archive_dll.name)
+    # 7z.dll reaches each release directory from the build: runtime-stage copies
+    # it out of the xim:7zip payload the core member declares.
 
     copy_tree(ROOT / "Example" / "SampleProject",
               RELEASE / "GPPCLI" / "SampleProject")

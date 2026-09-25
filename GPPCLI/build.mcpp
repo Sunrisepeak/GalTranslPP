@@ -1,15 +1,19 @@
 import std;
 import mcpp;
+import mcpp.deps.vcpkg;
+import mcpp.rules.qt;
 
-#include "../mcpp-build-scripts/qt_config.hpp"
+#include "../mcpp-build-scripts/gpp_deps.hpp"
 #include "../mcpp-build-scripts/mcpp_actions.hpp"
-
-// Translation and packaging actions are declared by the shared helper.
 
 int main() {
     track_build_scripts();
-    if (configure_qt({"Qt6Core"}) != 0) return 1;
+    if (!use_vcpkg()) return 1;
+    mcpp::rules::qt::options qt;
+    qt.modules = {"Core"};
+    qt.deploy_plugins = {};
+    qt.i18n = gpp_translations("qt_gppcli_en.ts");
+    if (!mcpp::rules::qt::compile(qt)) return 1;
     executable_actions actions("GalTranslPP_CLI");
-    const auto qm = actions.prepare_translations("GPPCLI");
-    return actions.publish_release("GPPCLI", qm) ? 0 : 1;
+    return actions.publish_release("GPPCLI", gpp_qm("qt_gppcli_en")) ? 0 : 1;
 }
