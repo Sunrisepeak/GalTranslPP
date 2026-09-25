@@ -1,0 +1,305 @@
+# Temporary, not meant to be merged: runs mcpp-language-server 0.0.4 on this project on Windows, to
+# reproduce and pin down mcpp-language-server issue 23 (a clangd database with -flto and no -c breaks
+# module scanning; clangd exits). Every experiment writes its evidence under D:/probe-out, uploaded
+# as the `mcppls-issue23-probe` artifact; the job summary has the table.
+name: mcppls issue-23 probe
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      session_seconds:
+        description: Seconds each editor session runs
+        default: '900'
+
+concurrency:
+  group: mcppls-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MCPP_VERSION: 2026.9.25.1   # the reporter's
+  LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
+  MCPPLS_VERSION: 0.0.4
+  QT_VERSION: 6.11.1          # mcpp-build-scripts/qt-root.txt
+  XLINGS_NON_INTERACTIVE: '1'
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  SESSION_SECONDS: ${{ inputs.session_seconds || '900' }}
+  OUT: D:/probe-out
+  PROBE: .github/mcppls-probe/probe.py
+  # The file the report set aside, the one in its error sample, their implementation units, the CLI's main.
+  OPEN_FILES: >-
+    GalTranslPP/GPPDefines.ixx GalTranslPP/ApiTool.ixx GalTranslPP/GPPDefines.cpp
+    GalTranslPP/NormalJsonTranslator.Core.cpp GPPCLI/GPPCLI.cpp
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # LLVM's own crash handler writes a minidump where LocalDumps says, as WER does.
+      - name: Crash dumps for clangd and mcppls
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force D:\probe-out\dumps | Out-Null
+          $wer = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
+          New-ItemProperty -Path $wer -Name Disabled -PropertyType DWord -Value 0 -Force | Out-Null
+          foreach ($exe in 'clangd.exe', 'mcppls.exe') {
+            $key = "$wer\LocalDumps\$exe"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value 'D:\probe-out\dumps' -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 20 -Force | Out-Null
+          }
+          "PROBE_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: xlings
+        shell: pwsh
+        run: |
+          irm https://d2learn.org/xlings-install.ps1.txt | iex
+          "$env:USERPROFILE\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: mcpp package store (cache)
+        uses: actions/cache@v6
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: probe-mcpp-xpkgs-${{ env.MCPP_VERSION }}-${{ env.LLVM_VERSION }}-v1
+
+      - name: mcpp ${{ env.MCPP_VERSION }} and LLVM ${{ env.LLVM_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            xlings update > /dev/null 2>&1 || true
+            if xlings install "mcpp@$MCPP_VERSION" -y -g; then break; fi
+            if [ "$attempt" = 5 ]; then echo "::error::mcpp@$MCPP_VERSION could not be installed"; exit 1; fi
+            sleep 30
+          done
+          mcpp --version
+          mcpp self config --mirror GLOBAL
+          for attempt in 1 2 3; do
+            if mcpp toolchain install llvm "$LLVM_VERSION"; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 30
+          done
+          mcpp toolchain default "llvm@$LLVM_VERSION"
+
+      - name: Qt (cache)
+        id: qt
+        uses: actions/cache@v6
+        with:
+          path: C:/Qt
+          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v4
+
+      # aqtinstall 3.3.0 does not know 6.11's per-architecture repository layout
+      # (qt6_6111/qt6_6111_msvc2022_64/Updates.xml): the base package's archives straight from the
+      # repository the online installer reads -- all of them but the documentation. qtdeclarative
+      # is not optional: lupdate.exe imports Qt6Qml.dll.
+      - name: Qt ${{ env.QT_VERSION }} msvc2022_64 (the base package)
+        if: steps.qt.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p C:/Qt/archives
+          python - <<'EOF'
+          import os, urllib.request, xml.etree.ElementTree as ET
+          version = os.environ["QT_VERSION"]; tag = version.replace(".", "")
+          base = f"https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_{tag}/qt6_{tag}_msvc2022_64"
+          package = f"qt.qt6.{tag}.win64_msvc2022_64"
+          updates = ET.fromstring(urllib.request.urlopen(f"{base}/Updates.xml", timeout=120).read())
+          entry = next(p for p in updates.iter("PackageUpdate") if p.findtext("Name") == package)
+          stamp = entry.findtext("Version")
+          for archive in (item.strip() for item in entry.findtext("DownloadableArchives").split(",")):
+              if archive.startswith("qtdoc-"):
+                  continue
+              print("downloading", archive, flush=True)
+              urllib.request.urlretrieve(f"{base}/{package}/{stamp}{archive}", f"C:/Qt/archives/{archive}")
+          EOF
+          # The archives are laid out from the install prefix (bin/, include/, lib/).
+          for archive in C:/Qt/archives/*.7z; do 7z x -y -bso0 "-oC:/Qt/$QT_VERSION/msvc2022_64" "$archive"; done
+          rm -rf C:/Qt/archives
+
+      - name: Point the build scripts at Qt
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="C:/Qt/$QT_VERSION/msvc2022_64"
+          ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/bin/Qt6Qml.dll" "$root/include/QtCore/QString" "$root/lib/Qt6Core.lib" > /dev/null
+          "$root/bin/lupdate.exe" -version
+          printf '%s\n' "$root" > mcpp-build-scripts/qt-root.txt
+          cat mcpp-build-scripts/qt-root.txt
+
+      - name: vcpkg_installed (cache)
+        id: vcpkg-installed
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: probe-vcpkg-installed-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'triplets/**') }}
+
+      - name: vcpkg binary cache
+        if: steps.vcpkg-installed.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: C:/vcpkg-bin
+          key: probe-vcpkg-bin-v1-${{ github.run_id }}
+          restore-keys: probe-vcpkg-bin-v1-
+
+      - name: vcpkg install --triplet gpp-x64-windows-release
+        if: steps.vcpkg-installed.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg-bin,readwrite
+          VCPKG_DISABLE_METRICS: '1'
+        run: |
+          New-Item -ItemType Directory -Force C:\vcpkg-bin | Out-Null
+          git clone --quiet https://github.com/microsoft/vcpkg C:\vcpkg-gpp
+          & C:\vcpkg-gpp\bootstrap-vcpkg.bat -disableMetrics
+          $env:VCPKG_ROOT = 'C:\vcpkg-gpp'
+          & C:\vcpkg-gpp\vcpkg.exe install --triplet gpp-x64-windows-release --x-buildtrees-root=C:\vt --clean-after-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save the vcpkg binary cache
+        if: always() && steps.vcpkg-installed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: C:/vcpkg-bin
+          key: probe-vcpkg-bin-v1-${{ github.run_id }}
+
+      - name: Save vcpkg_installed
+        if: success() && steps.vcpkg-installed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_installed
+          key: ${{ steps.vcpkg-installed.outputs.cache-primary-key }}
+
+      - name: mcppls ${{ env.MCPPLS_VERSION }} (the win32-x64 payload the VS Code extension carries)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/Sunrisepeak/mcpp-language-server/releases/download/v$MCPPLS_VERSION"
+          mkdir -p /c/mcppls && cd /c/mcppls
+          curl -fsSL --retry 3 -o payload-win32-x64.tar.gz "$base/payload-win32-x64.tar.gz"
+          curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
+          grep 'payload-win32-x64.tar.gz' SHA256SUMS | sha256sum -c -
+          tar -xzf payload-win32-x64.tar.gz
+          exe=$(find . -name mcppls.exe | head -1)
+          payload=$(cd "$(dirname "$exe")/.." && pwd -W)
+          echo "PAYLOAD=$payload" >> "$GITHUB_ENV"
+          echo "MCPPLS=$payload/bin/mcppls.exe" >> "$GITHUB_ENV"
+          echo "CLANGD=$payload/clangd/bin/clangd.exe" >> "$GITHUB_ENV"
+          "$payload/bin/mcppls.exe" --version
+          "$payload/clangd/bin/clangd.exe" --version
+
+      # mcppls runs this producer itself, with a 60 s limit; a cold run builds the build scripts and
+      # their tools (Updater), so it runs here first, then once more, timed, as mcppls will meet it.
+      - name: mcpp emit build-database (cold, then warm)
+        shell: bash
+        run: |
+          set +e
+          for kind in emit-cold emit; do
+            mkdir -p "$OUT/$kind"; start=$SECONDS
+            mcpp emit build-database --format json > "$OUT/$kind/build-database.json" 2> "$OUT/$kind/stderr.log"; code=$?
+            python "$PROBE" emit --json "$OUT/$kind/build-database.json" --exit-code $code --seconds $((SECONDS - start)) --out "$OUT/$kind"
+            tail -n 25 "$OUT/$kind/stderr.log"
+          done
+          exit 0
+
+      - name: E0 mcppls report (no file open; what the Diagnostic Report sees)
+        continue-on-error: true
+        shell: bash
+        env:
+          MCPPLS_CACHE_DIR: D:/mcppls-cache/e0
+        run: |
+          set +e
+          mkdir -p "$OUT/e0-report"
+          timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 420 --payload "$PAYLOAD" --log-level debug \
+            > "$OUT/e0-report/report.json" 2> "$OUT/e0-report/stderr.log"; code=$?
+          python "$PROBE" report --report "$OUT/e0-report/report.json" --stderr "$OUT/e0-report/stderr.log" --exit-code $code --out "$OUT/e0-report"
+
+      - name: E1 mcppls serve, an editor session
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python "$PROBE" session --server mcppls --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/e1 \
+            --root "$(pwd -W)" --out "$OUT/e1-mcppls" --duration "$SESSION_SECONDS" --open $OPEN_FILES
+          cdb=$(ls -d D:/mcppls-cache/e1/workspaces/*/contexts/default/cdb | head -n 1)
+          echo "E1_CDB=$cdb" >> "$GITHUB_ENV"
+          python "$PROBE" cdb-stats --cdb "$cdb" --out "$OUT/cdb-e1"
+
+      - name: E2 mcppls check GPPDefines.ixx
+        continue-on-error: true
+        shell: bash
+        env:
+          MCPPLS_CACHE_DIR: D:/mcppls-cache/e2
+        run: |
+          set +e
+          mkdir -p "$OUT/e2-check"
+          root="$(pwd -W)"
+          timeout 1200 "$MCPPLS" check "$root/GalTranslPP/GPPDefines.ixx" --root "$root" --payload "$PAYLOAD" --log-level debug > "$OUT/e2-check/check.log" 2>&1; code=$?
+          python "$PROBE" log --log "$OUT/e2-check/check.log" --exit-code $code --out "$OUT/e2-check"
+
+      # The same database without mcppls: as mcppls wrote it, and with -c before each source.
+      - name: E3 clangd alone on mcppls's database, as written and with -c
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          root="$(pwd -W)"
+          mkdir -p D:/cdb-asis && cp "$E1_CDB/compile_commands.json" D:/cdb-asis/
+          python "$PROBE" add-c --cdb D:/cdb-asis --out D:/cdb-withc
+          python "$PROBE" check --clangd "$CLANGD" --cdb D:/cdb-asis --root "$root" --out "$OUT/e3a-check-asis" "$root/GalTranslPP/GPPDefines.ixx"
+          python "$PROBE" check --clangd "$CLANGD" --cdb D:/cdb-withc --root "$root" --out "$OUT/e3b-check-withc" "$root/GalTranslPP/GPPDefines.ixx"
+          python "$PROBE" session --server clangd --clangd "$CLANGD" --cdb D:/cdb-asis --root "$root" --out "$OUT/e3c-clangd-asis" \
+            --duration "$SESSION_SECONDS" --open $OPEN_FILES
+          python "$PROBE" session --server clangd --clangd "$CLANGD" --cdb D:/cdb-withc --root "$root" --out "$OUT/e3d-clangd-withc" \
+            --duration "$SESSION_SECONDS" --open $OPEN_FILES
+
+      - name: E4 mcppls serve with LTO off (fast-release as every member's default profile)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+          git diff --stat
+          mkdir -p "$OUT/emit-fast-release"; start=$SECONDS
+          mcpp emit build-database --format json > "$OUT/emit-fast-release/build-database.json" 2> "$OUT/emit-fast-release/stderr.log"; code=$?
+          python "$PROBE" emit --json "$OUT/emit-fast-release/build-database.json" --exit-code $code --seconds $((SECONDS - start)) --out "$OUT/emit-fast-release"
+          python "$PROBE" session --server mcppls --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/e4 \
+            --root "$(pwd -W)" --out "$OUT/e4-mcppls-fast-release" --duration "$SESSION_SECONDS" --open $OPEN_FILES
+          cdb=$(ls -d D:/mcppls-cache/e4/workspaces/*/contexts/default/cdb | head -n 1)
+          python "$PROBE" cdb-stats --cdb "$cdb" --out "$OUT/cdb-e4"
+          git checkout -- .
+
+      - name: Collect logs, databases, dumps and the event log
+        if: always()
+        shell: pwsh
+        run: |
+          $out = 'D:\probe-out'
+          # mcppls's caches without clangd's index; the databases clangd was given.
+          robocopy D:\mcppls-cache "$out\mcppls-cache" /E /XD .cache index /NFL /NDL /NJH /NJS | Out-Null
+          foreach ($name in 'cdb-asis', 'cdb-withc') {
+            if (Test-Path "D:\$name") { robocopy "D:\$name" "$out\$name" compile_commands.json /NFL /NDL /NJH /NJS | Out-Null }
+          }
+          $since = [datetime]::Parse($env:PROBE_STARTED)
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', 'Application Hang' } |
+            Format-List TimeCreated, ProviderName, Id, Message | Out-File "$out\application-events.txt" -Encoding utf8
+          Get-ChildItem "$out\dumps" -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          exit 0
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python "$PROBE" summarize --out "$OUT" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mcppls-issue23-probe
+          path: D:/probe-out
+          retention-days: 14
