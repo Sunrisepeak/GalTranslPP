@@ -104,7 +104,7 @@ struct executable_actions {
         // (deps-vcpkg, rules-qt-xim), and 7z.dll ships in the xim:7zip payload.
         std::vector<path> search_dirs{
             vcpkg / "bin",
-            qt / "bin",
+            qt.empty() ? path() : qt / "bin",
             workspace / "3rdParty" / "pybind11" / "bin",
             path(mcpp::xpkg_dir("xim", "7zip")),
         };
@@ -136,6 +136,7 @@ struct executable_actions {
     // windeployqt's work runtime-stage cannot see. The release plugin only: the
     // SDK ships `qwindowsd.dll` beside `qwindows.dll`.
     void copy_qt_plugins(const path& destination) {
+        if (qt.empty()) return;   // planned before the SDK is present: nothing to copy yet
         for (const char* dir : {"platforms", "styles", "imageformats"}) {
             std::error_code error;
             for (const auto& entry : std::filesystem::directory_iterator(qt / "plugins" / dir, error)) {
