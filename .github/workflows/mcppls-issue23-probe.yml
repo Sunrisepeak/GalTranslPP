@@ -93,23 +93,43 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:/Qt
-          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v1
+          key: probe-qt-${{ env.QT_VERSION }}-win64_msvc2022_64-v2
 
-      - name: Qt ${{ env.QT_VERSION }} msvc2022_64
+      # aqtinstall 3.3.0 does not know 6.11's per-architecture repository layout
+      # (qt6_6111/qt6_6111_msvc2022_64/Updates.xml): qtbase and qttools (lupdate, lrelease) straight
+      # from the repository the online installer reads.
+      - name: Qt ${{ env.QT_VERSION }} msvc2022_64 (qtbase, qttools)
         if: steps.qt.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --quiet --upgrade aqtinstall
-          python -m aqt install-qt windows desktop "$QT_VERSION" win64_msvc2022_64 -O C:/Qt
+          mkdir -p C:/Qt/archives
+          python - <<'EOF'
+          import os, urllib.request, xml.etree.ElementTree as ET
+          version = os.environ["QT_VERSION"]; tag = version.replace(".", "")
+          base = f"https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_{tag}/qt6_{tag}_msvc2022_64"
+          package = f"qt.qt6.{tag}.win64_msvc2022_64"
+          updates = ET.fromstring(urllib.request.urlopen(f"{base}/Updates.xml", timeout=120).read())
+          entry = next(p for p in updates.iter("PackageUpdate") if p.findtext("Name") == package)
+          stamp = entry.findtext("Version")
+          for archive in (item.strip() for item in entry.findtext("DownloadableArchives").split(",")):
+              if not archive.startswith(("qtbase-", "qttools-")):
+                  continue
+              print("downloading", archive, flush=True)
+              urllib.request.urlretrieve(f"{base}/{package}/{stamp}{archive}", f"C:/Qt/archives/{archive}")
+          EOF
+          for archive in C:/Qt/archives/*.7z; do 7z x -y -bso0 -oC:/Qt "$archive"; done
+          rm -rf C:/Qt/archives
 
       - name: Point the build scripts at Qt
         shell: bash
         run: |
           set -euo pipefail
-          root="C:/Qt/$QT_VERSION/msvc2022_64"
-          ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/include/QtCore/QString" > /dev/null
+          lrelease=$(find /c/Qt -name lrelease.exe -path '*msvc2022_64*' | head -n 1)
+          root=$(cd "$(dirname "$lrelease")/.." && pwd -W)
+          ls "$root/bin/lrelease.exe" "$root/bin/lupdate.exe" "$root/include/QtCore/QString" "$root/lib/Qt6Core.lib" > /dev/null
           printf '%s\n' "$root" > mcpp-build-scripts/qt-root.txt
+          cat mcpp-build-scripts/qt-root.txt
 
       - name: vcpkg_installed (cache)
         id: vcpkg-installed
