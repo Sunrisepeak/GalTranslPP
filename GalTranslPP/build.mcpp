@@ -2,13 +2,11 @@ import std;
 import mcpp;
 import mcpp.deps.vcpkg;
 import mcpp.rules.qt;
-
-#include "../mcpp-build-scripts/gpp_deps.hpp"
+import gpp.build;
 
 int main() {
-    track_build_scripts();
     // The core library links the vcpkg libraries for every member that uses it.
-    if (!use_vcpkg({"7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
+    if (!gpp::use_vcpkg({"7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
                     "icuio", "icuin", "icuuc", "icudt", "libprotobuf-lite", "fmt",
                     "lua", "mecab", "opencc", "pcre2-8", "spdlog", "tree-sitter",
                     "zip", "z"}))
@@ -28,6 +26,6 @@ int main() {
     qt.deploy_plugins = {};
     // The core's QM file is written beside its TS file, where each release
     // layout copies it from.
-    qt.i18n = gpp_translations("qt_gpp_en.ts", ".");
+    qt.i18n = gpp::i18n("qt_gpp_en.ts", ".");
     return mcpp::rules::qt::compile(qt) ? 0 : 1;
 }

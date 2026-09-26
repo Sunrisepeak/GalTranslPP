@@ -2,19 +2,16 @@ import std;
 import mcpp;
 import mcpp.deps.vcpkg;
 import mcpp.rules.qt;
-
-#include "../mcpp-build-scripts/gpp_deps.hpp"
-#include "../mcpp-build-scripts/mcpp_actions.hpp"
+import gpp.build;
 
 int main() {
-    track_build_scripts();
     // The updater does not link the core, so it links bit7z itself.
-    if (!use_vcpkg({"7zip", "bit7z64"})) return 1;
+    if (!gpp::use_vcpkg({"7zip", "bit7z64"})) return 1;
     mcpp::rules::qt::options qt;
     qt.modules = {"Core", "Gui", "Widgets"};
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
-    qt.i18n = gpp_translations("qt_gppupdater_en.ts");
+    qt.i18n = gpp::i18n("qt_gppupdater_en.ts");
     if (!mcpp::rules::qt::compile(qt)) return 1;
-    executable_actions actions("Updater");
-    return actions.publish_release("Updater", gpp_qm("qt_gppupdater_en")) ? 0 : 1;
+    gpp::executable_actions actions("Updater");
+    return actions.publish_release("Updater", gpp::qm_path("qt_gppupdater_en")) ? 0 : 1;
 }

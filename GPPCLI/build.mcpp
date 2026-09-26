@@ -2,18 +2,15 @@ import std;
 import mcpp;
 import mcpp.deps.vcpkg;
 import mcpp.rules.qt;
-
-#include "../mcpp-build-scripts/gpp_deps.hpp"
-#include "../mcpp-build-scripts/mcpp_actions.hpp"
+import gpp.build;
 
 int main() {
-    track_build_scripts();
-    if (!use_vcpkg()) return 1;
+    if (!gpp::use_vcpkg()) return 1;
     mcpp::rules::qt::options qt;
     qt.modules = {"Core"};
     qt.deploy_plugins = {};
-    qt.i18n = gpp_translations("qt_gppcli_en.ts");
+    qt.i18n = gpp::i18n("qt_gppcli_en.ts");
     if (!mcpp::rules::qt::compile(qt)) return 1;
-    executable_actions actions("GalTranslPP_CLI");
-    return actions.publish_release("GPPCLI", gpp_qm("qt_gppcli_en")) ? 0 : 1;
+    gpp::executable_actions actions("GalTranslPP_CLI");
+    return actions.publish_release("GPPCLI", gpp::qm_path("qt_gppcli_en")) ? 0 : 1;
 }

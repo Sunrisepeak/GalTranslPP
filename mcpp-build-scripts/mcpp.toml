@@ -1,0 +1,11 @@
+# The build logic the GalTranslPP members share, as a module their build
+# programs import (`import gpp.build;`). It reaches no target.
+[package]
+namespace = "gpp"
+name      = "build"
+version   = "0.1.0"
+license   = "Apache-2.0"
+
+[build-dependencies]
+mcpp.plugins = { version = "0.13.1", features = ["deps-vcpkg", "rules-qt"], host-module = true }
+

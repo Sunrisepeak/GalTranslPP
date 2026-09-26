@@ -50,6 +50,9 @@ ldflags = [
 [target.windows.xlings.workspace]
 "xim:7zip" = ">=26.02"
 
+[build-dependencies]
+"gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
+
 [build-dependencies.mcpp]
 plugins = { version = "0.13.1", features = ["deps-vcpkg", "rules-qt-xim"], host-module = true, tools = ["mcpp-deps"] }
 

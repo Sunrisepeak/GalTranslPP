@@ -1,8 +1,46 @@
-#pragma once
+// The build logic the GalTranslPP members share: the parameters of the mcpp
+// plugins they use (the vcpkg triplet, the translation settings) and the
+// release layout of the three executable members, Release/GPPCLI,
+// Release/GPPGUI, Release/GUICORE and the optional private mirrors.
+//
+// A module rather than an included header: each build program imports it
+// compiled once, it cannot depend on what the program included before it, and
+// mcpp rebuilds the programs that import it when it changes.
+export module gpp.build;
 
-// The release layout of the three executable workspace members: Release/GPPCLI,
-// Release/GPPGUI, Release/GUICORE and the optional private mirrors. Included
-// only by build.mcpp programs, after gpp_deps.hpp.
+import std;
+import mcpp;
+import mcpp.deps.vcpkg;
+import mcpp.rules.qt;
+
+export namespace gpp {
+
+constexpr const char* triplet = "gpp-x64-windows-release";
+
+// Maps the workspace's vcpkg manifest into this member: the include directory
+// always, the listed libraries when the member links them itself.
+bool use_vcpkg(std::initializer_list<const char*> libraries = {}) {
+    mcpp::deps::vcpkg::options options;
+    options.triplet = triplet;
+    for (const char* library : libraries) options.libraries.emplace_back(library);
+    return static_cast<bool>(mcpp::deps::vcpkg::use(options));
+}
+
+// Qt's Visual Studio integration updates the TS file and releases the QM file
+// before compiling each project; `update_sources` keeps that order.
+mcpp::rules::qt::translations i18n(const char* ts, const char* qm_dir = "") {
+    mcpp::rules::qt::translations t;
+    t.ts = {ts};
+    t.update_sources = true;
+    t.tr_function_alias = {"translate+=gppTr"};
+    t.out_dir = qm_dir;
+    return t;
+}
+
+// Where rules-qt writes a member's QM file when `qm_dir` is left empty.
+std::filesystem::path qm_path(const char* stem) {
+    return std::filesystem::path(mcpp::out_dir()) / "qt" / "translations" / (std::string(stem) + ".qm");
+}
 
 struct executable_actions {
     using path = std::filesystem::path;
@@ -11,7 +49,7 @@ struct executable_actions {
     path workspace = project.parent_path();
     path release = workspace / "Release";
     path qt = mcpp::rules::qt::root();
-    path vcpkg = workspace / "vcpkg_installed" / gpp_triplet;
+    path vcpkg = workspace / "vcpkg_installed" / triplet;
     // Further directories the runtime closure is read from: a CMake subproject's
     // installed `bin/` (GPPGUI adds ElaWidgetTools').
     std::vector<path> extra_runtime_dirs;
@@ -200,3 +238,5 @@ struct executable_actions {
         return true;
     }
 };
+
+} // namespace gpp
