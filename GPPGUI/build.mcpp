@@ -9,7 +9,7 @@ int main() {
     const auto vcpkg = gpp::use_vcpkg();
     if (!vcpkg) return 1;
 
-    mcpp::rules::qt::options qt;
+    auto qt = gpp::qt_options();
     qt.modules = {"Core", "Gui", "Network", "Widgets"};
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
     qt.resources = {"GPPGUI.qrc"};
@@ -22,7 +22,7 @@ int main() {
     // subproject configured against the same Qt SDK.
     mcpp::deps::cmake::options ela;
     ela.source = "../3rdParty/ElaWidgetTools";
-    ela.cache_args = {"-DQT_SDK_DIR=" + mcpp::rules::qt::root(),
+    ela.cache_args = {"-DQT_SDK_DIR=" + mcpp::rules::qt::root(qt),
                       "-DELAWIDGETTOOLS_BUILD_EXAMPLE=OFF"};
     ela.dirs = {.include = "ElaWidgetTools/include", .lib = "ElaWidgetTools/lib",
                 .bin = "ElaWidgetTools/bin"};

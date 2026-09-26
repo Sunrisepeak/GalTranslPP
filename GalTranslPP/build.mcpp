@@ -28,7 +28,7 @@ int main() {
     if (const std::string sevenZip = mcpp::xpkg_dir("xim", "7zip"); !sevenZip.empty())
         mcpp::deploy((std::filesystem::path(sevenZip) / "7z.dll").generic_string().c_str(), ".");
 
-    mcpp::rules::qt::options qt;
+    auto qt = gpp::qt_options();
     qt.modules = {"Core"};
     qt.deploy_plugins = {};
     // The core's QM file is written beside its TS file, where each release

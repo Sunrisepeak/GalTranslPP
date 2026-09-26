@@ -9,6 +9,12 @@ license = "Apache-2.0"
 [toolchain]
 windows = "llvm@22.1.8"
 
+# mcpp:plugins, at one version for every member; each member states its own
+# features (`mcpp.plugins = { workspace = true, features = [...] }`).
+# mcpp-build-scripts is not a member and names the same version itself.
+[workspace.dependencies]
+mcpp.plugins = "0.15.2"
+
 [workspace.build]
 cxxflags = [
   "-finput-charset=UTF-8",

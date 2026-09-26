@@ -45,18 +45,21 @@ ldflags = [
   "-loleaut32"
 ]
 
-# bit7z loads 7-Zip's library at run time; the official 7z.dll is part of the
-# xim:7zip payload on Windows, and the build program deploys it.
 [target.windows.xlings.workspace]
-# The Qt SDK, at the version this project builds with (rules-qt declares none).
-"xim:qt-base" = "6.11.1.1"
+# The Qt SDK this project builds with; rules-qt declares none. Every member
+# that uses Qt declares it, since a member's build program sees only the
+# payloads that member declares (mcpp#713). To build with another Qt, comment
+# the line out and set QT_ROOT_DIR, or set `qt.root` in build.mcpp.
+"xim:qt-base" = "6.11.1"
+# 7z.dll, which bit7z loads at run time: the official library, part of the
+# xim:7zip payload on Windows, deployed by the build program.
 "xim:7zip" = ">=26.02"
 
 [build-dependencies]
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
 
 [build-dependencies.mcpp]
-plugins = { version = "0.15.1", features = ["deps-vcpkg", "deps-archive", "rules-qt"], host-module = true }
+plugins = { workspace = true, features = ["deps-vcpkg", "deps-archive", "rules-qt"], host-module = true }
 
 [targets.GalTranslPP]
 kind = "lib"

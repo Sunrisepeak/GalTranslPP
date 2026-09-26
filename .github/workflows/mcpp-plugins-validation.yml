@@ -1,5 +1,5 @@
 # Temporary, not meant to be merged: builds this project through mcpp:plugins
-# 0.13.1 (deps-vcpkg, deps-cmake, rules-qt) on a runner that has none of the
+# 0.15.2 (deps-vcpkg, deps-cmake, deps-archive, rules-qt) on a runner that has none of the
 # project's prerequisites installed by hand -- no Qt installer, no vcpkg clone,
 # no qt-root.txt, no ElaWidgetTools build.py -- and records what the release
 # layouts and `mcpp pack` contain.
@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.mcpp/registry/data/xpkgs
-          key: plugins-validation-xpkgs-${{ env.MCPP_VERSION }}-v1
+          key: plugins-validation-xpkgs-${{ env.MCPP_VERSION }}-v2
 
       # vcpkg's per-user directory: its binary cache (archives/), registry cache
       # (registries/) and downloads. 22 ports cold is the long pole.
@@ -72,8 +72,10 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
+          start=$(date +%s)
           mcpp emit build-database --format json > out/build-database.json 2> out/emit.log || {
             echo "::error::emit failed before the first build"; tail -40 out/emit.log; exit 1; }
+          echo "emit (fresh checkout): $(( $(date +%s) - start )) s" | tee -a out/timings.txt "$GITHUB_STEP_SUMMARY"
           python - <<'PY'
           import json
           db = json.load(open("out/build-database.json", encoding="utf-8"))
@@ -135,6 +137,26 @@ jobs:
           set -o pipefail
           mcpp build -p GPPGUI --profile fast-release 2>&1 | tee out/build-gui-2.log
           ! grep -E "VCPKG install|CMAKE ElaWidgetTools" out/build-gui-2.log
+
+      # The editor's question again, after one build: every host tool, build
+      # program and vcpkg prefix already exists.
+      - name: emit build-database after a build
+        run: |
+          set -o pipefail
+          start=$(date +%s)
+          mcpp emit build-database --format json > out/build-database-2.json 2> out/emit-2.log || {
+            echo "::error::the second emit failed"; tail -40 out/emit-2.log; exit 1; }
+          echo "emit (after a build): $(( $(date +%s) - start )) s" | tee -a out/timings.txt "$GITHUB_STEP_SUMMARY"
+
+      # mcpp:plugins 0.15.2: the program mcpp synthesises for gpp.build (rules-qt
+      # enabled only for its module) asks for nothing and reports nothing, and
+      # every member that uses Qt finds the xim:qt-base 6.11.1 payload.
+      - name: no build program reports a missing Qt SDK
+        run: |
+          ! grep -l "no Qt SDK" out/emit.log out/emit-2.log out/build-cli.log out/build-gui.log out/build-gui-2.log ||
+            { echo "::error::a build program reported no Qt SDK"; exit 1; }
+          grep -rhoE "rules-qt[.]sdk=xlings: .*xim-x-qt-base.6[.]11[.]1$" --include=build.mcpp.cache . | sort -u | tee out/qt-sdk-facts.txt
+          test -s out/qt-sdk-facts.txt || { echo "::error::no member recorded the xim:qt-base 6.11.1 SDK"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         if: always()

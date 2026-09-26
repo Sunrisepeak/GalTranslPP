@@ -8,7 +8,7 @@ int main() {
     // The updater does not link the core, so it links bit7z itself.
     const auto vcpkg = gpp::use_vcpkg({"7zip", "bit7z64"});
     if (!vcpkg) return 1;
-    mcpp::rules::qt::options qt;
+    auto qt = gpp::qt_options();
     qt.modules = {"Core", "Gui", "Widgets"};
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
     qt.i18n = gpp::i18n("qt_gppupdater_en.ts");

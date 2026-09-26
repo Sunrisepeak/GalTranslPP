@@ -6,6 +6,8 @@ name      = "build"
 version   = "0.1.0"
 license   = "Apache-2.0"
 
+# Not a workspace member, so it cannot inherit `[workspace.dependencies]`
+# (mcpp#714): the version is the root's, written again.
 [build-dependencies]
-mcpp.plugins = { version = "0.15.1", features = ["deps-vcpkg", "deps-archive", "rules-qt"], host-module = true }
+mcpp.plugins = { version = "0.15.2", features = ["deps-vcpkg", "deps-archive", "rules-qt"], host-module = true }
 

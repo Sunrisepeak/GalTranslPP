@@ -20,6 +20,20 @@ export namespace gpp {
 
 constexpr const char* triplet = "gpp-x64-windows-release";
 
+// The Qt SDK, for every member. Empty takes QT_ROOT_DIR, then the xim:qt-base
+// payload the members declare (rules-qt's order). A path here names another
+// SDK for the whole project; how-to-build.md says when to use it.
+constexpr const char* qt_root = "";
+
+// The rules-qt options every member starts from, so the SDK is named once and
+// everything that asks for it (the rule, the release layout, ElaWidgetTools'
+// configure) receives the same answer.
+mcpp::rules::qt::options qt_options() {
+    mcpp::rules::qt::options options;
+    options.root = qt_root;
+    return options;
+}
+
 // Maps the workspace's vcpkg manifest into this member: the include directory
 // always, the listed libraries when the member links them itself, and the
 // files of the prefix `deploy` names beside the program.
@@ -178,7 +192,7 @@ struct executable_actions {
     path project = path(mcpp::manifest_dir());
     path workspace = project.parent_path();
     path release = workspace / "Release";
-    path qt = mcpp::rules::qt::root();
+    path qt = mcpp::rules::qt::root(qt_options());
     // The vcpkg prefix, as use_vcpkg() returned it.
     path vcpkg;
     // Further directories the runtime closure is read from: a CMake subproject's

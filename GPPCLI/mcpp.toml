@@ -8,15 +8,18 @@ name = "cli"
 
 [build-dependencies]
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
-mcpp.plugins = { version = "0.15.1", features = ["deps-vcpkg", "rules-qt"], host-module = true }
+mcpp.plugins = { workspace = true, features = ["deps-vcpkg", "rules-qt"], host-module = true }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }
 
-# The release directory carries 7z.dll, which bit7z loads at run time; the
-# official library is part of the xim:7zip payload on Windows. The runtime
-# stage reads it from this member's own declaration.
 [target.windows.xlings.workspace]
-# The Qt SDK, at the version this project builds with (rules-qt declares none).
-"xim:qt-base" = "6.11.1.1"
+# The Qt SDK this project builds with; rules-qt declares none. Every member
+# that uses Qt declares it, since a member's build program sees only the
+# payloads that member declares (mcpp#713). To build with another Qt, comment
+# the line out and set QT_ROOT_DIR, or set `qt.root` in build.mcpp.
+"xim:qt-base" = "6.11.1"
+# 7z.dll, which bit7z loads at run time: the official library, part of the
+# xim:7zip payload on Windows. The runtime stage reads it from this member's
+# own declaration.
 "xim:7zip" = ">=26.02"
 
 [profile.release]
