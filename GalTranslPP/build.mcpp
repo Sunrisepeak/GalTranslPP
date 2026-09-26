@@ -5,12 +5,19 @@ import mcpp.rules.qt;
 import gpp.build;
 
 int main() {
-    // The core library links the vcpkg libraries for every member that uses it.
-    if (!gpp::use_vcpkg({"7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
-                    "icuio", "icuin", "icuuc", "icudt", "libprotobuf-lite", "fmt",
-                    "lua", "mecab", "opencc", "pcre2-8", "spdlog", "tree-sitter",
-                    "zip", "z"}))
-        return 1;
+    // The core library links the vcpkg libraries for every member that uses it,
+    // and places OpenCC's dictionaries beside every program that links it.
+    const auto vcpkg = gpp::use_vcpkg({"7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
+                                       "icuio", "icuin", "icuuc", "icudt", "libprotobuf-lite", "fmt",
+                                       "lua", "mecab", "opencc", "pcre2-8", "spdlog", "tree-sitter",
+                                       "zip", "z"},
+                                      gpp::opencc_files());
+    if (!vcpkg) return 1;
+
+    // BaseConfig beside every program that links the core -- the repository's
+    // files, the embedded Python environment from the project's archive, and
+    // OpenCC's dictionaries -- and in the release layout.
+    gpp::publish_base_config(gpp::base_config(vcpkg.deployed));
 
     // The embedded Python the pybind11 submodule carries: a runtime search
     // directory of every program linking the core, for `mcpp run`, `mcpp pack`

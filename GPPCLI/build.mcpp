@@ -10,7 +10,10 @@ int main() {
     qt.modules = {"Core"};
     qt.deploy_plugins = {};
     qt.i18n = gpp::i18n("qt_gppcli_en.ts");
+    // Qt's own strings in Chinese, which the program loads as translations/qt_zh_CN.qm.
+    qt.i18n.qt_languages = {"zh_CN"};
     if (!mcpp::rules::qt::compile(qt)) return 1;
+    gpp::sample_project();
     gpp::executable_actions actions("GalTranslPP_CLI");
     return actions.publish_release("GPPCLI", gpp::qm_path("qt_gppcli_en")) ? 0 : 1;
 }

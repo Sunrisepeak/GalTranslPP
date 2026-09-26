@@ -11,10 +11,11 @@
 | 依赖 | 来源 |
 |---|---|
 | mcpp、LLVM 工具链 | xlings |
-| Qt 6.11.1（MSVC 2022 64-bit） | `mcpp:plugins` 的 `rules-qt-xim`（xim:qt） |
+| Qt 6.11.1（官方 msvc2022_64 预编译包，MSVC ABI；mcpp 默认的 clang 工具链直接使用） | `mcpp:plugins` 的 `rules-qt-xim-base`（xim:qt-base：qtbase、qttools 与 qttranslations） |
 | vcpkg 与 `vcpkg.json` 中的库 | `mcpp:plugins` 的 `deps-vcpkg`（xim:vcpkg），首次构建时安装 |
 | ElaWidgetTools | `mcpp:plugins` 的 `deps-cmake`，由构建按子模块源码编译 |
 | 7z.dll | xim:7zip |
+| 嵌入式 Python 环境、OpenCC 数据、`BaseConfig` 与 `SampleProject` | 构建从 `Example/` 与 vcpkg 前缀取得，放在程序旁 |
 
 安装 xlings，重启终端后安装 mcpp：
 
@@ -51,8 +52,12 @@ mcpp build -p GPPGUI --profile fast-release
 
 ## 4. 运行
 
-构建产物位于 `Release\` 目录，Qt 运行库、Qt 插件、ElaWidgetTools、vcpkg 运行库、7z.dll 与翻译文件已随程序放置。
-还需要：
+```cmd
+mcpp run -p GPPCLI
+mcpp run -p GPPGUI
+```
 
-1. 将 `Example\BaseConfig` 中的 `Python-3.12.10-embed-amd64.zip` 解压到同一文件夹；
-2. 运行项目根目录下的 `Release.py`，复制配置数据与 opencc 数据。
+程序旁已放置运行所需的全部文件：Qt 运行库与插件、Qt 自身的中文翻译、ElaWidgetTools、vcpkg 运行库、7z.dll、
+项目翻译文件，以及 `BaseConfig`（嵌入式 Python 环境由 `Example/BaseConfig` 中的压缩包在构建时解出，OpenCC 数据
+来自 vcpkg 前缀）。release 与 fast-release profile 同时写出 `Release\GPPCLI`、`Release\GPPGUI` 与
+`Release\GUICORE` 三个发布目录；`mcpp pack --format dir` 在成员目录下运行，产出可分发的目录。

@@ -1,5 +1,6 @@
 // The build logic the GalTranslPP members share: the parameters of the mcpp
-// plugins they use (the vcpkg triplet, the translation settings) and the
+// plugins they use (the vcpkg triplet, the translation settings), the data the
+// programs read at run time from `BaseConfig/` beside themselves, and the
 // release layout of the three executable members, Release/GPPCLI,
 // Release/GPPGUI, Release/GUICORE and the optional private mirrors.
 //
@@ -10,7 +11,9 @@ export module gpp.build;
 
 import std;
 import mcpp;
+import mcpp.deps;
 import mcpp.deps.vcpkg;
+import mcpp.deps.archive;
 import mcpp.rules.qt;
 
 export namespace gpp {
@@ -18,12 +21,107 @@ export namespace gpp {
 constexpr const char* triplet = "gpp-x64-windows-release";
 
 // Maps the workspace's vcpkg manifest into this member: the include directory
-// always, the listed libraries when the member links them itself.
-bool use_vcpkg(std::initializer_list<const char*> libraries = {}) {
+// always, the listed libraries when the member links them itself, and the
+// files of the prefix `deploy` names beside the program.
+mcpp::deps::vcpkg::prefix use_vcpkg(std::initializer_list<const char*> libraries = {},
+                                    std::vector<mcpp::deps::deploy_entry> deploy = {}) {
     mcpp::deps::vcpkg::options options;
     options.triplet = triplet;
     for (const char* library : libraries) options.libraries.emplace_back(library);
-    return static_cast<bool>(mcpp::deps::vcpkg::use(options));
+    options.deploy = std::move(deploy);
+    return mcpp::deps::vcpkg::use(options);
+}
+
+// ─── BaseConfig, beside every program that links the core ─────────────────
+//
+// The programs open `BaseConfig/...` relative to their own directory. What was
+// once two manual steps and Release.py is declared here: the repository's
+// Example/BaseConfig, the embedded Python environment from the project's own
+// archive (extracted by an action, `mcpp.deps.archive`), and OpenCC's
+// dictionaries from the vcpkg prefix. Each file is deployed, so `mcpp run`
+// finds it beside the program and `mcpp pack` carries it, and each is copied
+// into the release layout.
+
+constexpr const char* python_archive = "Python-3.12.10-embed-amd64.zip";
+
+// The OpenCC files the programs read: `t2s.json` and the two dictionaries it
+// names.
+std::vector<mcpp::deps::deploy_entry> opencc_files() {
+    return {{"share/opencc/t2s.json", "BaseConfig/opencc"},
+            {"share/opencc/TSPhrases.ocd2", "BaseConfig/opencc"},
+            {"share/opencc/TSCharacters.ocd2", "BaseConfig/opencc"}};
+}
+
+// Deploys BaseConfig and returns each file with its path beside the program.
+// `opencc` is what `use_vcpkg(..., opencc_files())` deployed.
+std::vector<mcpp::deps::deployed_file> base_config(const std::vector<mcpp::deps::deployed_file>& opencc) {
+    namespace fs = std::filesystem;
+    const fs::path dir = (fs::path(mcpp::manifest_dir()).parent_path() / "Example" / "BaseConfig").lexically_normal();
+    std::vector<mcpp::deps::deployed_file> out;
+
+    // The repository's files. The archive is extracted below; the two
+    // directories the manual steps used to create are left out if present.
+    mcpp::rerun_if_changed_glob("../Example/BaseConfig/**");
+    std::vector<fs::path> files;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        const auto rel = it->path().lexically_relative(dir);
+        const auto top = rel.begin()->string();
+        if (it->is_directory(ec)) {
+            if (top == "opencc" || top == "Python-3.12.10-embed-amd64") it.disable_recursion_pending();
+            continue;
+        }
+        if (rel == python_archive || !it->is_regular_file(ec)) continue;
+        files.push_back(it->path());
+    }
+    std::ranges::sort(files);
+    for (auto const& f : files) {
+        const auto rel = f.lexically_relative(dir);
+        const std::string to = (fs::path("BaseConfig") / rel.parent_path()).generic_string();
+        const std::string from = f.generic_string();
+        mcpp::deploy(from.c_str(), to.c_str());
+        out.push_back({from, (fs::path("BaseConfig") / rel).generic_string()});
+    }
+
+    // The embedded Python environment, from the project's archive.
+    mcpp::deps::archive::options python;
+    python.archive = (dir / python_archive).generic_string();
+    python.to      = "BaseConfig";
+    const auto extracted = mcpp::deps::archive::unpack(python);
+    out.insert(out.end(), extracted.files.begin(), extracted.files.end());
+
+    out.insert(out.end(), opencc.begin(), opencc.end());
+    return out;
+}
+
+// Copies BaseConfig into the release layout, as Release.py did: every file into
+// Release/GPPCLI and Release/GPPGUI, and into Release/GUICORE all but the
+// global configuration, MeCab and the Python environment, which GUICORE takes
+// from the GUI it updates.
+void publish_base_config(const std::vector<mcpp::deps::deployed_file>& files) {
+    namespace fs = std::filesystem;
+    const auto profile = std::string_view(mcpp::profile());
+    if (profile != "release" && profile != "fast-release") return;
+    const fs::path release = fs::path(mcpp::manifest_dir()).parent_path() / "Release";
+    auto guicore = [](const std::string& to) {
+        return !(to == "BaseConfig/GlobalConfig.toml" || to.starts_with("BaseConfig/mecab/") ||
+                 to.starts_with("BaseConfig/Python-3.12.10-embed-amd64/"));
+    };
+    unsigned n = 0;
+    for (const char* member : {"GPPCLI", "GPPGUI", "GUICORE"}) {
+        for (auto const& f : files) {
+            if (std::string_view(member) == "GUICORE" && !guicore(f.to)) continue;
+            const std::string dst = (release / member / f.to).lexically_normal().generic_string();
+            const std::string id  = "base-config-" + std::to_string(n++);
+            mcpp::action a;
+            a.id   = id.c_str();
+            a.role = mcpp::roles::artifact;
+            a.arg("${mcpp.self}").arg("stage").arg("--verify").arg("content")
+             .arg("--output").arg(dst.c_str()).arg(f.path.c_str())
+             .input(f.path.c_str()).output(dst.c_str()).submit();
+        }
+    }
 }
 
 // Qt's Visual Studio integration updates the TS file and releases the QM file
@@ -40,6 +138,36 @@ mcpp::rules::qt::translations i18n(const char* ts, const char* qm_dir = "") {
 // Where rules-qt writes a member's QM file when `qm_dir` is left empty.
 std::filesystem::path qm_path(const char* stem) {
     return std::filesystem::path(mcpp::out_dir()) / "qt" / "translations" / (std::string(stem) + ".qm");
+}
+
+// The CLI's sample project, beside the program and in its release directory,
+// as Release.py placed it.
+void sample_project() {
+    namespace fs = std::filesystem;
+    const fs::path dir = (fs::path(mcpp::manifest_dir()).parent_path() / "Example" / "SampleProject").lexically_normal();
+    mcpp::rerun_if_changed_glob("../Example/SampleProject/**");
+    const auto profile = std::string_view(mcpp::profile());
+    const bool release = profile == "release" || profile == "fast-release";
+    const fs::path out = fs::path(mcpp::manifest_dir()).parent_path() / "Release" / "GPPCLI";
+    std::error_code ec;
+    unsigned n = 0;
+    for (auto it = fs::recursive_directory_iterator(dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        const auto rel = it->path().lexically_relative(dir);
+        const std::string from = it->path().generic_string();
+        const std::string to = (fs::path("SampleProject") / rel.parent_path()).generic_string();
+        mcpp::deploy(from.c_str(), to.c_str());
+        if (!release) continue;
+        const std::string dst = (out / "SampleProject" / rel).lexically_normal().generic_string();
+        const std::string id  = "sample-project-" + std::to_string(n++);
+        mcpp::action a;
+        a.id   = id.c_str();
+        a.role = mcpp::roles::artifact;
+        a.arg("${mcpp.self}").arg("stage").arg("--verify").arg("content")
+         .arg("--output").arg(dst.c_str()).arg(from.c_str())
+         .input(from.c_str()).output(dst.c_str()).submit();
+    }
 }
 
 struct executable_actions {
@@ -196,6 +324,10 @@ struct executable_actions {
                                 const path& destination) {
         const auto translations = destination / "translations";
         copy_file(qm, translations / qm.filename());
+        // Qt's own strings, which rules-qt combined beside the member's own
+        // (`translations::qt_languages`).
+        const auto qt_qm = qm.parent_path() / "qt_zh_CN.qm";
+        copy_file(qt_qm, translations / qt_qm.filename());
         if (member != "Updater") {
             const auto core_qm = workspace / "GalTranslPP" / "qt_gpp_en.qm";
             copy_file(core_qm, translations / core_qm.filename());

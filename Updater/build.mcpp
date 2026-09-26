@@ -11,6 +11,8 @@ int main() {
     qt.modules = {"Core", "Gui", "Widgets"};
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
     qt.i18n = gpp::i18n("qt_gppupdater_en.ts");
+    // Qt's own strings in Chinese, which the program loads as translations/qt_zh_CN.qm.
+    qt.i18n.qt_languages = {"zh_CN"};
     if (!mcpp::rules::qt::compile(qt)) return 1;
     gpp::executable_actions actions("Updater");
     return actions.publish_release("Updater", gpp::qm_path("qt_gppupdater_en")) ? 0 : 1;

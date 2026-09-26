@@ -13,6 +13,8 @@ int main() {
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
     qt.resources = {"GPPGUI.qrc"};
     qt.i18n = gpp::i18n("qt_gppgui_en.ts");
+    // Qt's own strings in Chinese, which the program loads as translations/qt_zh_CN.qm.
+    qt.i18n.qt_languages = {"zh_CN"};
     if (!mcpp::rules::qt::compile(qt)) return 1;
 
     // ElaWidgetTools, the widget library the GUI is built on, as a CMake

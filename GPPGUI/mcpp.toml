@@ -8,7 +8,7 @@ name = "gui"
 
 [build-dependencies]
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
-mcpp.plugins = { version = "0.13.1", features = ["deps-vcpkg", "deps-cmake", "rules-qt-xim"], host-module = true, tools = ["mcpp-deps"] }
+mcpp.plugins = { version = "0.14.0", features = ["deps-vcpkg", "deps-cmake", "rules-qt-xim-base"], host-module = true, tools = ["mcpp-deps"] }
 "gpp.updater" = { path = "../Updater", tools = ["Updater"] }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }
 
