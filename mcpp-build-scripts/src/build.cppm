@@ -179,7 +179,8 @@ struct executable_actions {
     path workspace = project.parent_path();
     path release = workspace / "Release";
     path qt = mcpp::rules::qt::root();
-    path vcpkg = workspace / "vcpkg_installed" / triplet;
+    // The vcpkg prefix, as use_vcpkg() returned it.
+    path vcpkg;
     // Further directories the runtime closure is read from: a CMake subproject's
     // installed `bin/` (GPPGUI adds ElaWidgetTools').
     std::vector<path> extra_runtime_dirs;
@@ -187,8 +188,9 @@ struct executable_actions {
     std::string target_file;
     unsigned next_action = 0;
 
-    explicit executable_actions(std::string name)
-        : target(std::move(name)), target_file("${mcpp.target_file:" + target + "}") {
+    executable_actions(std::string name, const mcpp::deps::vcpkg::prefix& prefix)
+        : vcpkg(prefix.root), target(std::move(name)),
+          target_file("${mcpp.target_file:" + target + "}") {
         // Private release path files are optional, as in the VS post-build events.
         mcpp::rerun_if_changed(release.string().c_str());
     }
@@ -270,7 +272,8 @@ struct executable_actions {
               .arg("--dest").arg(dest.c_str())
               .input(exe.c_str()).input(tool).output(output.c_str());
         // The vcpkg prefix and the Qt SDK are installed by the build itself
-        // (deps-vcpkg, rules-qt-xim), and 7z.dll ships in the xim:7zip payload.
+        // (deps-vcpkg, and the xim:qt-base payload the members declare), and
+        // 7z.dll ships in the xim:7zip payload.
         std::vector<path> search_dirs{
             vcpkg / "bin",
             qt.empty() ? path() : qt / "bin",

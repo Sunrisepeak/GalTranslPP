@@ -6,7 +6,8 @@ import mcpp.rules.qt;
 import gpp.build;
 
 int main() {
-    if (!gpp::use_vcpkg()) return 1;
+    const auto vcpkg = gpp::use_vcpkg();
+    if (!vcpkg) return 1;
 
     mcpp::rules::qt::options qt;
     qt.modules = {"Core", "Gui", "Network", "Widgets"};
@@ -35,7 +36,7 @@ int main() {
         std::cerr << "Updater build dependency produced no executable\n";
         return 1;
     }
-    gpp::executable_actions actions("GalTranslPP_GUI");
+    gpp::executable_actions actions("GalTranslPP_GUI", vcpkg);
     actions.extra_runtime_dirs.push_back(elaPrefix.bin);
     if (!actions.publish_release("GPPGUI", gpp::qm_path("qt_gppgui_en"))) return 1;
     if (const auto profile = std::string_view(mcpp::profile());

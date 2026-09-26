@@ -5,7 +5,8 @@ import mcpp.rules.qt;
 import gpp.build;
 
 int main() {
-    if (!gpp::use_vcpkg()) return 1;
+    const auto vcpkg = gpp::use_vcpkg();
+    if (!vcpkg) return 1;
     mcpp::rules::qt::options qt;
     qt.modules = {"Core"};
     qt.deploy_plugins = {};
@@ -14,6 +15,6 @@ int main() {
     qt.i18n.qt_languages = {"zh_CN"};
     if (!mcpp::rules::qt::compile(qt)) return 1;
     gpp::sample_project();
-    gpp::executable_actions actions("GalTranslPP_CLI");
+    gpp::executable_actions actions("GalTranslPP_CLI", vcpkg);
     return actions.publish_release("GPPCLI", gpp::qm_path("qt_gppcli_en")) ? 0 : 1;
 }

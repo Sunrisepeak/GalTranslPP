@@ -96,6 +96,7 @@ jobs:
           for f in Release/GPPCLI/GalTranslPP_CLI.exe Release/GPPGUI/GalTranslPP_GUI.exe \
                    Release/GPPGUI/Updater.exe Release/GPPGUI/7z.dll Release/GPPCLI/7z.dll \
                    Release/GPPGUI/Qt6Widgets.dll Release/GPPGUI/ElaWidgetTools.dll \
+                   Release/GPPGUI/msvcp140.dll Release/GPPGUI/vcruntime140_1.dll \
                    Release/GPPGUI/platforms/qwindows.dll Release/GPPGUI/translations/qt_gppgui_en.qm \
                    Release/GPPGUI/translations/qt_gpp_en.qm Release/GPPCLI/translations/qt_gppcli_en.qm \
                    Release/GPPCLI/translations/qt_zh_CN.qm Release/GPPGUI/translations/qt_zh_CN.qm \
@@ -108,7 +109,7 @@ jobs:
           done
           # GUICORE takes the global configuration, MeCab and Python from the GUI it updates.
           ! test -e Release/GUICORE/BaseConfig/Python-3.12.10-embed-amd64 || { echo "::error::GUICORE carries Python"; exit 1; }
-          echo "ok: the layouts carry the programs, Qt, ElaWidgetTools, 7z.dll, the translations and BaseConfig, with no Release.py"
+          echo "ok: the layouts carry the programs, Qt with its VC++ runtime, ElaWidgetTools, 7z.dll, the translations and BaseConfig, with no Release.py"
 
       # D, preliminary: the same runtime, collected by `mcpp pack` from the
       # directories the plugins declare, with no runtime-stage.
@@ -120,13 +121,14 @@ jobs:
           find . -path '*target/dist/*' -type f | sort > out/pack-files.txt
           wc -l out/pack-files.txt
           for f in GalTranslPP_GUI.exe Qt6Widgets.dll ElaWidgetTools.dll 7z.dll python312.dll \
+                   msvcp140.dll vcruntime140.dll vcruntime140_1.dll \
                    platforms/qwindows.dll translations/qt_gppgui_en.qm translations/qt_gpp_en.qm \
                    translations/qt_zh_CN.qm BaseConfig/opencc/t2s.json BaseConfig/GlobalConfig.toml \
                    BaseConfig/Python-3.12.10-embed-amd64/python.exe SampleProject/Config.toml; do
             grep -qi "/$f\$" out/pack-files.txt || { echo "::error::the packed tree carries no $f"; exit 1; }
           done
           ! grep -i "unresolved\|incomplete" out/pack-gui.log || { echo "::error::the closure is incomplete"; exit 1; }
-          echo "ok: mcpp pack collected the runtime, the translations and BaseConfig"
+          echo "ok: mcpp pack collected the runtime (the VC++ runtime included), the translations and BaseConfig"
 
       - name: second build runs no installation
         run: |

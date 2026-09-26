@@ -6,7 +6,8 @@ import gpp.build;
 
 int main() {
     // The updater does not link the core, so it links bit7z itself.
-    if (!gpp::use_vcpkg({"7zip", "bit7z64"})) return 1;
+    const auto vcpkg = gpp::use_vcpkg({"7zip", "bit7z64"});
+    if (!vcpkg) return 1;
     mcpp::rules::qt::options qt;
     qt.modules = {"Core", "Gui", "Widgets"};
     qt.deploy_plugins = {"platforms", "styles", "imageformats"};
@@ -14,6 +15,6 @@ int main() {
     // Qt's own strings in Chinese, which the program loads as translations/qt_zh_CN.qm.
     qt.i18n.qt_languages = {"zh_CN"};
     if (!mcpp::rules::qt::compile(qt)) return 1;
-    gpp::executable_actions actions("Updater");
+    gpp::executable_actions actions("Updater", vcpkg);
     return actions.publish_release("Updater", gpp::qm_path("qt_gppupdater_en")) ? 0 : 1;
 }

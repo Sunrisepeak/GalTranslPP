@@ -11,7 +11,7 @@
 | 依赖 | 来源 |
 |---|---|
 | mcpp、LLVM 工具链 | xlings |
-| Qt 6.11.1（官方 msvc2022_64 预编译包，MSVC ABI；mcpp 默认的 clang 工具链直接使用） | `mcpp:plugins` 的 `rules-qt-xim-base`（xim:qt-base：qtbase、qttools 与 qttranslations） |
+| Qt 6.11.1（官方 msvc2022_64 预编译包，MSVC ABI；mcpp 默认的 clang 工具链直接使用） | 各成员 `mcpp.toml` 声明的 `xim:qt-base`（qtbase、qttools 与 qttranslations），由 `mcpp:plugins` 的 `rules-qt` 使用 |
 | vcpkg 与 `vcpkg.json` 中的库 | `mcpp:plugins` 的 `deps-vcpkg`（xim:vcpkg），首次构建时安装 |
 | ElaWidgetTools | `mcpp:plugins` 的 `deps-cmake`，由构建按子模块源码编译 |
 | 7z.dll | xim:7zip |

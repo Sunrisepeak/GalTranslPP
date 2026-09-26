@@ -8,7 +8,7 @@ name = "gui"
 
 [build-dependencies]
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
-mcpp.plugins = { version = "0.14.0", features = ["deps-vcpkg", "deps-cmake", "rules-qt-xim-base"], host-module = true, tools = ["mcpp-deps"] }
+mcpp.plugins = { version = "0.15.1", features = ["deps-vcpkg", "deps-cmake", "rules-qt"], host-module = true }
 "gpp.updater" = { path = "../Updater", tools = ["Updater"] }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }
 
@@ -16,6 +16,8 @@ mcpp.plugins = { version = "0.14.0", features = ["deps-vcpkg", "deps-cmake", "ru
 # official library is part of the xim:7zip payload on Windows. The runtime
 # stage reads it from this member's own declaration.
 [target.windows.xlings.workspace]
+# The Qt SDK, at the version this project builds with (rules-qt declares none).
+"xim:qt-base" = "6.11.1.1"
 "xim:7zip" = ">=26.02"
 
 [profile.release]
