@@ -14,13 +14,10 @@ int main() {
                     "zip", "z"}))
         return 1;
 
-    // The embedded Python the pybind11 submodule carries, beside every program
-    // linking the core, for `mcpp run` and `mcpp pack`.
-    for (const char* dll : {"python312.dll", "python3.dll"}) {
-        const auto file = std::filesystem::path(mcpp::manifest_dir()).parent_path() /
-                          "3rdParty" / "pybind11" / "bin" / dll;
-        if (std::filesystem::exists(file)) mcpp::deploy(file.generic_string().c_str(), ".");
-    }
+    // The embedded Python the pybind11 submodule carries: a runtime search
+    // directory of every program linking the core, for `mcpp run`, `mcpp pack`
+    // and the DLLs mcpp places beside a program after its link.
+    mcpp::runtime_search_dir("../3rdParty/pybind11/bin");
     // 7z.dll (bit7z loads it at run time) from the xim:7zip payload this
     // member declares, beside every program linking the core.
     if (const std::string sevenZip = mcpp::xpkg_dir("xim", "7zip"); !sevenZip.empty())
