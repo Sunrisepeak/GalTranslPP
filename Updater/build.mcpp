@@ -1,15 +1,20 @@
 import std;
 import mcpp;
-
-#include "../mcpp-build-scripts/qt_config.hpp"
-#include "../mcpp-build-scripts/mcpp_actions.hpp"
-#include "../mcpp-build-scripts/vcpkg_link.hpp"
+import mcpp.deps.vcpkg;
+import mcpp.rules.qt;
+import gpp.build;
 
 int main() {
-    track_build_scripts();
-    if (configure_qt({"Qt6Core", "Qt6Gui", "Qt6Widgets"}) != 0) return 1;
-    if (!link_vcpkg_libraries({"7zip", "bit7z64"})) return 1;
-    executable_actions actions("Updater");
-    const auto qm = actions.prepare_translations("Updater");
-    return actions.publish_release("Updater", qm) ? 0 : 1;
+    // The updater does not link the core, so it links bit7z itself.
+    const auto vcpkg = gpp::use_vcpkg({"7zip", "bit7z64"});
+    if (!vcpkg) return 1;
+    mcpp::rules::qt::options qt;
+    qt.modules = {"Core", "Gui", "Widgets"};
+    qt.deploy_plugins = {"platforms", "styles", "imageformats"};
+    qt.i18n = gpp::i18n("qt_gppupdater_en.ts");
+    // Qt's own strings in Chinese, which the program loads as translations/qt_zh_CN.qm.
+    qt.i18n.qt_languages = {"zh_CN"};
+    if (!mcpp::rules::qt::compile(qt)) return 1;
+    gpp::executable_actions actions("Updater", vcpkg);
+    return actions.publish_release("Updater", gpp::qm_path("qt_gppupdater_en")) ? 0 : 1;
 }

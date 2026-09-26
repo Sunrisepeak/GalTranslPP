@@ -1,20 +1,38 @@
 import std;
 import mcpp;
-
-#include "../mcpp-build-scripts/qt_config.hpp"
-#include "../mcpp-build-scripts/mcpp_translations.hpp"
-#include "../mcpp-build-scripts/vcpkg_link.hpp"
+import mcpp.deps.vcpkg;
+import mcpp.rules.qt;
+import gpp.build;
 
 int main() {
-    track_build_scripts();
-    if (configure_qt({"Qt6Core"}) != 0) return 1;
-    if (!link_vcpkg_libraries({
-            "7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
-            "icuio", "icuin", "icuuc", "icudt", "libprotobuf-lite", "fmt",
-            "lua", "mecab", "opencc", "pcre2-8", "spdlog", "tree-sitter",
-            "zip", "z"})) return 1;
-    const auto project = std::filesystem::path(mcpp::manifest_dir());
-    const auto qm = qt_translation(project, project / "qt_gpp_en.ts",
-                                   project / "qt_gpp_en.qm");
-    return qm.empty() ? 1 : 0;
+    // The core library links the vcpkg libraries for every member that uses it,
+    // and places OpenCC's dictionaries beside every program that links it.
+    const auto vcpkg = gpp::use_vcpkg({"7zip", "bit7z64", "abseil_dll", "cld3", "cpr", "gumbo",
+                                       "icuio", "icuin", "icuuc", "icudt", "libprotobuf-lite", "fmt",
+                                       "lua", "mecab", "opencc", "pcre2-8", "spdlog", "tree-sitter",
+                                       "zip", "z"},
+                                      gpp::opencc_files());
+    if (!vcpkg) return 1;
+
+    // BaseConfig beside every program that links the core -- the repository's
+    // files, the embedded Python environment from the project's archive, and
+    // OpenCC's dictionaries -- and in the release layout.
+    gpp::publish_base_config(gpp::base_config(vcpkg.deployed));
+
+    // The embedded Python the pybind11 submodule carries: a runtime search
+    // directory of every program linking the core, for `mcpp run`, `mcpp pack`
+    // and the DLLs mcpp places beside a program after its link.
+    mcpp::runtime_search_dir("../3rdParty/pybind11/bin");
+    // 7z.dll (bit7z loads it at run time) from the xim:7zip payload this
+    // member declares, beside every program linking the core.
+    if (const std::string sevenZip = mcpp::xpkg_dir("xim", "7zip"); !sevenZip.empty())
+        mcpp::deploy((std::filesystem::path(sevenZip) / "7z.dll").generic_string().c_str(), ".");
+
+    mcpp::rules::qt::options qt;
+    qt.modules = {"Core"};
+    qt.deploy_plugins = {};
+    // The core's QM file is written beside its TS file, where each release
+    // layout copies it from.
+    qt.i18n = gpp::i18n("qt_gpp_en.ts", ".");
+    return mcpp::rules::qt::compile(qt) ? 0 : 1;
 }

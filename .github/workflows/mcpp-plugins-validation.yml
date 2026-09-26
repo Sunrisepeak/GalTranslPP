@@ -1,0 +1,143 @@
+# Temporary, not meant to be merged: builds this project through mcpp:plugins
+# 0.13.1 (deps-vcpkg, deps-cmake, rules-qt) on a runner that has none of the
+# project's prerequisites installed by hand -- no Qt installer, no vcpkg clone,
+# no qt-root.txt, no ElaWidgetTools build.py -- and records what the release
+# layouts and `mcpp pack` contain.
+name: mcpp-plugins validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: mcpp-plugins-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MCPP_VERSION: 2026.9.26.2
+  XLINGS_NON_INTERACTIVE: '1'
+  PYTHONUTF8: '1'
+
+jobs:
+  build:
+    # A draft waits for mcpp:plugins 0.13.1 and the mcpp release it needs.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: windows-2025
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: xlings
+        shell: pwsh
+        run: |
+          irm https://d2learn.org/xlings-install.ps1.txt | iex
+          "$env:USERPROFILE\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: mcpp ${{ env.MCPP_VERSION }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            xlings update > /dev/null 2>&1 || true
+            if xlings install "mcpp@$MCPP_VERSION" -y -g; then break; fi
+            [ "$attempt" = 5 ] && { echo "::error::mcpp@$MCPP_VERSION could not be installed"; exit 1; }
+            sleep 30
+          done
+          mcpp --version
+          mcpp self config --mirror GLOBAL
+
+      - name: mcpp package store (cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: plugins-validation-xpkgs-${{ env.MCPP_VERSION }}-v1
+
+      # vcpkg's per-user directory: its binary cache (archives/), registry cache
+      # (registries/) and downloads. 22 ports cold is the long pole.
+      - name: vcpkg per-user directory (cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg
+          key: plugins-validation-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'triplets/**') }}-${{ github.run_id }}
+          restore-keys: plugins-validation-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'triplets/**') }}-
+
+      # The editor's question, asked before anything is installed: the build
+      # programs must plan without Qt, vcpkg or ElaWidgetTools present.
+      - name: emit build-database on a fresh checkout
+        run: |
+          set -o pipefail
+          mkdir -p out
+          mcpp emit build-database --format json > out/build-database.json 2> out/emit.log || {
+            echo "::error::emit failed before the first build"; tail -40 out/emit.log; exit 1; }
+          python - <<'PY'
+          import json
+          db = json.load(open("out/build-database.json", encoding="utf-8"))
+          print("emit ok:", {k: (len(v) if isinstance(v, list) else v) for k, v in db.items() if k != "units"})
+          PY
+
+      - name: mcpp build -p GPPCLI (fast-release)
+        timeout-minutes: 200
+        run: mcpp build -p GPPCLI --profile fast-release 2>&1 | tee out/build-cli.log
+
+      - name: mcpp build -p GPPGUI (fast-release)
+        timeout-minutes: 120
+        run: mcpp build -p GPPGUI --profile fast-release 2>&1 | tee out/build-gui.log
+
+      - name: the release layouts carry the runtime
+        run: |
+          set -euo pipefail
+          find Release -type f | sort > out/release-files.txt
+          wc -l out/release-files.txt
+          for f in Release/GPPCLI/GalTranslPP_CLI.exe Release/GPPGUI/GalTranslPP_GUI.exe \
+                   Release/GPPGUI/Updater.exe Release/GPPGUI/7z.dll Release/GPPCLI/7z.dll \
+                   Release/GPPGUI/Qt6Widgets.dll Release/GPPGUI/ElaWidgetTools.dll \
+                   Release/GPPGUI/msvcp140.dll Release/GPPGUI/vcruntime140_1.dll \
+                   Release/GPPGUI/platforms/qwindows.dll Release/GPPGUI/translations/qt_gppgui_en.qm \
+                   Release/GPPGUI/translations/qt_gpp_en.qm Release/GPPCLI/translations/qt_gppcli_en.qm \
+                   Release/GPPCLI/translations/qt_zh_CN.qm Release/GPPGUI/translations/qt_zh_CN.qm \
+                   Release/GPPCLI/BaseConfig/GlobalConfig.toml Release/GPPCLI/BaseConfig/opencc/t2s.json \
+                   Release/GPPCLI/BaseConfig/opencc/TSPhrases.ocd2 \
+                   Release/GPPCLI/BaseConfig/Python-3.12.10-embed-amd64/python.exe \
+                   Release/GPPGUI/BaseConfig/Python-3.12.10-embed-amd64/python.exe \
+                   Release/GUICORE/BaseConfig/Prompt.toml Release/GPPCLI/SampleProject/Config.toml; do
+            test -f "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          # GUICORE takes the global configuration, MeCab and Python from the GUI it updates.
+          ! test -e Release/GUICORE/BaseConfig/Python-3.12.10-embed-amd64 || { echo "::error::GUICORE carries Python"; exit 1; }
+          echo "ok: the layouts carry the programs, Qt with its VC++ runtime, ElaWidgetTools, 7z.dll, the translations and BaseConfig, with no Release.py"
+
+      # D, preliminary: the same runtime, collected by `mcpp pack` from the
+      # directories the plugins declare, with no runtime-stage.
+      - name: mcpp pack --format dir (GPPGUI, GPPCLI)
+        run: |
+          set -euo pipefail
+          (cd GPPGUI && mcpp pack --format dir --profile fast-release) 2>&1 | tee out/pack-gui.log
+          (cd GPPCLI && mcpp pack --format dir --profile fast-release) 2>&1 | tee out/pack-cli.log
+          find . -path '*target/dist/*' -type f | sort > out/pack-files.txt
+          wc -l out/pack-files.txt
+          for f in GalTranslPP_GUI.exe Qt6Widgets.dll ElaWidgetTools.dll 7z.dll python312.dll \
+                   msvcp140.dll vcruntime140.dll vcruntime140_1.dll \
+                   platforms/qwindows.dll translations/qt_gppgui_en.qm translations/qt_gpp_en.qm \
+                   translations/qt_zh_CN.qm BaseConfig/opencc/t2s.json BaseConfig/GlobalConfig.toml \
+                   BaseConfig/Python-3.12.10-embed-amd64/python.exe SampleProject/Config.toml; do
+            grep -qi "/$f\$" out/pack-files.txt || { echo "::error::the packed tree carries no $f"; exit 1; }
+          done
+          ! grep -i "unresolved\|incomplete" out/pack-gui.log || { echo "::error::the closure is incomplete"; exit 1; }
+          echo "ok: mcpp pack collected the runtime (the VC++ runtime included), the translations and BaseConfig"
+
+      - name: second build runs no installation
+        run: |
+          set -o pipefail
+          mcpp build -p GPPGUI --profile fast-release 2>&1 | tee out/build-gui-2.log
+          ! grep -E "VCPKG install|CMAKE ElaWidgetTools" out/build-gui-2.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mcpp-plugins-validation
+          path: out/
