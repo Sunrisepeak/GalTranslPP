@@ -78,7 +78,8 @@ std::vector<mcpp::deps::deployed_file> base_config(const std::vector<mcpp::deps:
     std::ranges::sort(files);
     for (auto const& f : files) {
         const auto rel = f.lexically_relative(dir);
-        const std::string to = (fs::path("BaseConfig") / rel.parent_path()).generic_string();
+        const std::string to = rel.parent_path().empty()
+            ? std::string("BaseConfig") : (fs::path("BaseConfig") / rel.parent_path()).generic_string();
         const std::string from = f.generic_string();
         mcpp::deploy(from.c_str(), to.c_str());
         out.push_back({from, (fs::path("BaseConfig") / rel).generic_string()});
@@ -156,7 +157,8 @@ void sample_project() {
         if (!it->is_regular_file(ec)) continue;
         const auto rel = it->path().lexically_relative(dir);
         const std::string from = it->path().generic_string();
-        const std::string to = (fs::path("SampleProject") / rel.parent_path()).generic_string();
+        const std::string to = rel.parent_path().empty()
+            ? std::string("SampleProject") : (fs::path("SampleProject") / rel.parent_path()).generic_string();
         mcpp::deploy(from.c_str(), to.c_str());
         if (!release) continue;
         const std::string dst = (out / "SampleProject" / rel).lexically_normal().generic_string();
