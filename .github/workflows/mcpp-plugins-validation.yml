@@ -108,9 +108,9 @@ jobs:
       - name: mcpp pack --format dir (GPPGUI, GPPCLI)
         run: |
           set -euo pipefail
-          mcpp pack -p GPPGUI --format dir --profile fast-release 2>&1 | tee out/pack-gui.log
-          mcpp pack -p GPPCLI --format dir --profile fast-release 2>&1 | tee out/pack-cli.log
-          find target/dist -type f | sort > out/pack-files.txt
+          (cd GPPGUI && mcpp pack --format dir --profile fast-release) 2>&1 | tee out/pack-gui.log
+          (cd GPPCLI && mcpp pack --format dir --profile fast-release) 2>&1 | tee out/pack-cli.log
+          find . -path '*target/dist/*' -type f | sort > out/pack-files.txt
           wc -l out/pack-files.txt
           for f in GalTranslPP_GUI.exe Qt6Widgets.dll ElaWidgetTools.dll 7z.dll python312.dll \
                    platforms/qwindows.dll translations/qt_gppgui_en.qm translations/qt_gpp_en.qm; do
