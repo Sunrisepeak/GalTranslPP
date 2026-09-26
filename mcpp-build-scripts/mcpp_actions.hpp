@@ -45,7 +45,8 @@ struct executable_actions {
         destination = destination.lexically_normal();
         error.clear();
         if (!fs::is_directory(destination, error)) {
-            std::println(stderr, "Private release directory is unavailable: {}", destination.string());
+            const auto message = "private release directory is unavailable: " + destination.string();
+            mcpp::warning(message.c_str());
             return {};
         }
         return destination;
@@ -56,7 +57,7 @@ struct executable_actions {
         const auto id = "stage-" + std::to_string(next_action++);
         mcpp::action action;
         action.id = id.c_str();
-        action.role = "artifact";
+        action.role = mcpp::roles::artifact;
         action.arg("${mcpp.self}").arg("stage").arg("--verify").arg("content")
               .arg("--output").arg(output.c_str()).arg(source.c_str())
               .input(target_file.c_str()).input(source.c_str())
@@ -73,7 +74,7 @@ struct executable_actions {
         const auto id = "stage-pdb-" + std::to_string(next_action++);
         mcpp::action action;
         action.id = id.c_str();
-        action.role = "artifact";
+        action.role = mcpp::roles::artifact;
         action.arg("${mcpp.self}").arg("stage").arg("--verify").arg("content")
               .arg("--output").arg(output.c_str()).arg(source.c_str())
               .input(target_file.c_str()).output(output.c_str()).submit();
@@ -83,7 +84,7 @@ struct executable_actions {
                              std::string_view destination_name) {
         const char* tool = mcpp::dep_bin("gpp.runtime-stage", "runtime_stage");
         if (!tool || !*tool) {
-            std::println(stderr, "runtime-stage host tool is unavailable");
+            mcpp::warning("runtime-stage host tool is unavailable");
             return false;
         }
         const auto manifest = release / ".mcpp-runtime" /
@@ -95,7 +96,7 @@ struct executable_actions {
         const auto id = "runtime-stage-" + std::to_string(next_action++);
         mcpp::action action;
         action.id = id.c_str();
-        action.role = "artifact";
+        action.role = mcpp::roles::artifact;
         action.arg(tool).arg("--exe").arg(exe.c_str())
               .arg("--manifest").arg(output.c_str())
               .arg("--dest").arg(dest.c_str())
