@@ -7,9 +7,15 @@ name = "gui"
 "gpp.version" = { path = "../GPPVersion" }
 
 [build-dependencies]
-mcpp.plugins = { version = "0.13.0", features = ["deps-vcpkg", "deps-cmake", "rules-qt-xim"], host-module = true, tools = ["mcpp-deps"] }
+mcpp.plugins = { version = "0.13.1", features = ["deps-vcpkg", "deps-cmake", "rules-qt-xim"], host-module = true, tools = ["mcpp-deps"] }
 "gpp.updater" = { path = "../Updater", tools = ["Updater"] }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }
+
+# The release directory carries 7z.dll, which bit7z loads at run time; the
+# official library is part of the xim:7zip payload on Windows. The runtime
+# stage reads it from this member's own declaration.
+[target.windows.xlings.workspace]
+"xim:7zip" = ">=26.02"
 
 [profile.release]
 opt = 3

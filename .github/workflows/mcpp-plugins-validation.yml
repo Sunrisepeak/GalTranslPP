@@ -1,5 +1,5 @@
 # Temporary, not meant to be merged: builds this project through mcpp:plugins
-# 0.13.0 (deps-vcpkg, deps-cmake, rules-qt) on a runner that has none of the
+# 0.13.1 (deps-vcpkg, deps-cmake, rules-qt) on a runner that has none of the
 # project's prerequisites installed by hand -- no Qt installer, no vcpkg clone,
 # no qt-root.txt, no ElaWidgetTools build.py -- and records what the release
 # layouts and `mcpp pack` contain.
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build:
-    # A draft waits for mcpp:plugins 0.13.0 and the mcpp release it needs.
+    # A draft waits for mcpp:plugins 0.13.1 and the mcpp release it needs.
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: windows-2025
     timeout-minutes: 330

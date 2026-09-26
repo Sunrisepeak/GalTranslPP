@@ -109,6 +109,8 @@ struct executable_actions {
             workspace / "3rdParty" / "pybind11" / "bin",
             path(mcpp::xpkg_dir("xim", "7zip")),
         };
+        if (search_dirs[3].empty())
+            mcpp::warning("xim:7zip is not declared by this member; the runtime stage cannot find 7z.dll");
         search_dirs.insert(search_dirs.end(), extra_runtime_dirs.begin(), extra_runtime_dirs.end());
         // Every directory is passed, present or not: on a first build the vcpkg
         // prefix is installed by an action after this program has run, and
