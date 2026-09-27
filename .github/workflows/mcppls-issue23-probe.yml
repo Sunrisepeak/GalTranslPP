@@ -11,6 +11,9 @@ on:
       session_seconds:
         description: Seconds each editor session runs
         default: '900'
+      mcppls_version:
+        description: The mcpp-language-server release whose win32-x64 payload is probed
+        default: '0.0.5'
 
 concurrency:
   group: mcppls-probe-${{ github.ref }}
@@ -19,7 +22,7 @@ concurrency:
 env:
   MCPP_VERSION: 2026.9.25.1   # the reporter's
   LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
-  MCPPLS_VERSION: 0.0.4
+  MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.5' }}
   QT_VERSION: 6.11.1          # mcpp-build-scripts/qt-root.txt
   XLINGS_NON_INTERACTIVE: '1'
   PYTHONUTF8: '1'
@@ -31,6 +34,9 @@ env:
   OPEN_FILES: >-
     GalTranslPP/GPPDefines.ixx GalTranslPP/ApiTool.ixx GalTranslPP/GPPDefines.cpp
     GalTranslPP/NormalJsonTranslator.Core.cpp GPPCLI/GPPCLI.cpp
+  # mcpp-language-server plan 2026-09-27 V-W: only the editor session (E1) runs, with a go-to-definition
+  # timeline (definitions.json; summary.json's `definitions`): where each call site's definition lands.
+  DEFINITION_PROBE_ONLY: '1'
 
 jobs:
   probe:
@@ -232,6 +238,7 @@ jobs:
           python "$PROBE" cdb-stats --cdb "$cdb" --out "$OUT/cdb-e1"
 
       - name: E2 mcppls check GPPDefines.ixx
+        if: env.DEFINITION_PROBE_ONLY != '1'
         continue-on-error: true
         shell: bash
         env:
@@ -245,6 +252,7 @@ jobs:
 
       # The same database without mcppls: as mcppls wrote it, and with -c before each source.
       - name: E3 clangd alone on mcppls's database, as written and with -c
+        if: env.DEFINITION_PROBE_ONLY != '1'
         continue-on-error: true
         shell: bash
         run: |
@@ -260,6 +268,7 @@ jobs:
             --duration "$SESSION_SECONDS" --open $OPEN_FILES
 
       - name: E4 mcppls serve with LTO off (fast-release as every member's default profile)
+        if: env.DEFINITION_PROBE_ONLY != '1'
         continue-on-error: true
         shell: bash
         run: |
