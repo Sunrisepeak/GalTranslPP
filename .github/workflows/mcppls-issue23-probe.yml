@@ -13,7 +13,7 @@ on:
         default: '900'
       mcppls_version:
         description: The mcpp-language-server release whose win32-x64 payload is probed
-        default: '0.0.5'
+        default: '0.0.6'
 
 concurrency:
   group: mcppls-probe-${{ github.ref }}
@@ -22,7 +22,7 @@ concurrency:
 env:
   MCPP_VERSION: 2026.9.25.1   # the reporter's
   LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
-  MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.5' }}
+  MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.6' }}
   QT_VERSION: 6.11.1          # mcpp-build-scripts/qt-root.txt
   XLINGS_NON_INTERACTIVE: '1'
   PYTHONUTF8: '1'
