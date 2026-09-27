@@ -7,6 +7,8 @@ name = "cli"
 "gpp.version" = { path = "../GPPVersion" }
 
 [build-dependencies]
+"gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
+mcpp.plugins = { workspace = true, features = ["deps-vcpkg", "rules-qt"], host-module = true }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }
 
 [profile.release]
@@ -31,8 +33,7 @@ include_dirs = [
   ".",
   "../GalTranslPP",
   "../3rdParty/pybind11/include",
-  "../3rdParty/pybind11/Python/include",
-  "../vcpkg_installed/gpp-x64-windows-release/include"
+  "../3rdParty/pybind11/Python/include"
 ]
 ldflags = ["-L../3rdParty/pybind11/bin", "-lpython312", "-lpython3"]
 

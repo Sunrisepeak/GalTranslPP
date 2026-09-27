@@ -10,6 +10,6 @@ compile_commands.json
 mcpp-generated/
 /GalTranslPP/qt_gpp_en.qm
 
-# Files populated by Release.py
+# Left by the manual steps earlier versions of how-to-build described
 /Example/BaseConfig/opencc/
 /Example/BaseConfig/Python-3.12.10-embed-amd64/
