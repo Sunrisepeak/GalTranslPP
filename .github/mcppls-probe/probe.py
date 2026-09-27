@@ -186,6 +186,36 @@ def hover_position(text):
     return {"line": 0, "character": 0}
 
 
+def call_positions(text, limit=8):
+    """Call sites worth asking go-to-definition about: names followed by '(' outside comments and directives."""
+    keywords = {"if", "for", "while", "switch", "return", "sizeof", "catch", "main", "module", "import", "export", "decltype",
+                "alignof", "static_cast", "reinterpret_cast", "const_cast", "dynamic_cast", "std", "noexcept", "requires",
+                "alignas", "assert", "defined", "static_assert", "co_await", "co_return", "throw", "new", "delete"}
+    found = []
+    for number, line in enumerate(text.splitlines()):
+        stripped = line.lstrip()
+        if stripped.startswith(("#", "//", "import", "export module", "module", "*", "/*")):
+            continue
+        for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", line):
+            name = match.group(1)
+            if name in keywords or name[0].isupper() and name.isupper():
+                continue
+            found.append({"line": number, "character": match.start(1), "name": name})
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def definition_targets(result):
+    if isinstance(result, dict):
+        result = [result]
+    targets = []
+    for item in result or []:
+        if isinstance(item, dict):
+            targets.append(item.get("uri") or item.get("targetUri") or "")
+    return targets
+
+
 def hover_text(result):
     if not isinstance(result, dict):
         return ""
@@ -265,6 +295,8 @@ def session(args):
         texts[path] = path.read_text(encoding="utf-8-sig", errors="replace")
         lsp.notify("textDocument/didOpen", {"textDocument": {"uri": uri_of(path), "languageId": "cpp", "version": 1, "text": texts[path]}})
     timeline = []
+    definitions = []   # plan 2026-09-27 V-W: where go-to-definition lands, round by round
+    calls = {path: call_positions(texts[path]) for path in files}
     deadline = started + args.duration
     rounds = 0
     while time.time() < deadline and not lsp.closed.is_set():
@@ -283,6 +315,14 @@ def session(args):
                 "symbols": symbols["status"], "symbolCount": len(symbols.get("result") or []) if symbols["status"] == "ok" else None,
                 "alive": lsp.proc.poll() is None,
             })
+            for call in calls[path]:
+                answer = lsp.request("textDocument/definition", {"textDocument": document, "position": {"line": call["line"], "character": call["character"]}},
+                                     timeout=args.request_timeout)
+                targets = definition_targets(answer.get("result")) if answer["status"] == "ok" else []
+                kinds = sorted({pathlib.PurePosixPath(target.split("?")[0]).suffix.lower() for target in targets})
+                definitions.append({"t": round(time.time() - started, 1), "round": rounds, "file": path.name, "name": call["name"],
+                                    "line": call["line"], "status": answer["status"], "seconds": answer["seconds"],
+                                    "targets": [target.rsplit("/", 1)[-1] for target in targets], "kinds": kinds})
     report = None
     if args.server == "mcppls" and not lsp.closed.is_set():
         answered = lsp.request("cxxModules/report", {}, timeout=180)
@@ -324,8 +364,23 @@ def session(args):
     }
     if report is not None and isinstance(report, dict):
         summary["report"] = report_summary(report)
+    # Plan 2026-09-27 V-W: of the definitions the last round asked for, how many landed in an interface (.ixx, .cppm)
+    # -- the declaration -- and how many in an implementation (.cpp); and the first round each call site reached a .cpp.
+    last = max((item["round"] for item in definitions), default=0)
+    final = [item for item in definitions if item["round"] == last]
+    interface = {".ixx", ".cppm", ".ccm", ".cxxm", ".mpp"}
+    summary["definitions"] = {
+        "sites": len(final),
+        "toInterface": sum(1 for item in final if item["kinds"] and set(item["kinds"]) <= interface),
+        "toImplementation": sum(1 for item in final if any(kind in {".cpp", ".cc", ".cxx"} for kind in item["kinds"])),
+        "empty": sum(1 for item in final if not item["kinds"]),
+        "firstImplementationAt": {f"{item['file']}:{item['line']}:{item['name']}": next(
+            (other["t"] for other in definitions if other["file"] == item["file"] and other["line"] == item["line"] and other["name"] == item["name"]
+             and any(kind in {".cpp", ".cc", ".cxx"} for kind in other["kinds"])), None) for item in final},
+    }
     write_json(out / "summary.json", summary)
     write_json(out / "timeline.json", timeline)
+    write_json(out / "definitions.json", definitions)
     write_json(out / "server-messages.json", lsp.server_messages)
     (out / "crash-excerpts.txt").write_text("\n\n-----\n\n".join(excerpts), encoding="utf-8")
     print(json.dumps({key: summary[key] for key in ("server", "exitedDuringSession", "exitCodeHex", "hoverOk", "hoverProvidedBy", "hoverEmpty", "moduleNotFound", "stderr")}, indent=1))
