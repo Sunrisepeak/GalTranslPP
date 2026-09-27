@@ -5,11 +5,12 @@ name = "gui"
 [dependencies]
 "gpp.core" = { path = "../GalTranslPP" }
 "gpp.version" = { path = "../GPPVersion" }
-# The updater ships beside the GUI: built for the GUI's target and profile,
-# none of its code linked in (mcpp 2026.9.27.1, `artifacts`).
-"gpp.updater" = { path = "../Updater", artifacts = ["Updater"] }
 
 [build-dependencies]
+# The updater, copied into the release layouts. A `tools` edge until
+# mcpp-community/mcpp#723 settles how an `artifacts` program shares the
+# GUI's runtime files (both deploy translations/qt_zh_CN.qm).
+"gpp.updater" = { path = "../Updater", tools = ["Updater"] }
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
 mcpp.plugins = { workspace = true, features = ["deps-vcpkg", "deps-cmake", "rules-qt"], host-module = true }
 "gpp.runtime-stage" = { path = "../mcpp-build-scripts/runtime-stage", tools = ["runtime_stage"] }

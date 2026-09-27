@@ -31,9 +31,11 @@ int main() {
     const auto elaPrefix = mcpp::deps::cmake::use(ela);
     if (!elaPrefix) return 1;
 
-    // The updater, built for this program's target through the `artifacts`
-    // edge in mcpp.toml; the engine names its path in the copy actions.
-    const std::string updater = "${mcpp.artifact:gpp.updater/Updater}";
+    const char* updater = mcpp::dep_bin("gpp.updater", "Updater");
+    if (!updater || !*updater) {
+        std::cerr << "Updater build dependency produced no executable\n";
+        return 1;
+    }
     gpp::executable_actions actions("GalTranslPP_GUI", vcpkg);
     actions.extra_runtime_dirs.push_back(elaPrefix.bin);
     if (!actions.publish_release("GPPGUI", gpp::qm_path("qt_gppgui_en"))) return 1;
