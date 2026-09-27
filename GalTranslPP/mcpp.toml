@@ -45,16 +45,6 @@ ldflags = [
   "-loleaut32"
 ]
 
-[target.windows.xlings.workspace]
-# The Qt SDK this project builds with; rules-qt declares none. Every member
-# that uses Qt declares it, since a member's build program sees only the
-# payloads that member declares (mcpp#713). To build with another Qt, comment
-# the line out and set QT_ROOT_DIR, or set `qt.root` in build.mcpp.
-"xim:qt-base" = "6.11.1"
-# 7z.dll, which bit7z loads at run time: the official library, part of the
-# xim:7zip payload on Windows, deployed by the build program.
-"xim:7zip" = ">=26.02"
-
 [build-dependencies]
 "gpp.build" = { path = "../mcpp-build-scripts", host-module = true }
 

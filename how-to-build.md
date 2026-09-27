@@ -11,7 +11,7 @@
 | 依赖 | 来源 |
 |---|---|
 | mcpp、LLVM 工具链 | xlings |
-| Qt 6.11.1（官方 msvc2022_64 预编译包，MSVC ABI；mcpp 默认的 clang 工具链直接使用） | 使用 Qt 的成员在 `mcpp.toml` 中声明的 `xim:qt-base` 6.11.1（qtbase、qttools、qttranslations 与 VC++ 运行库），由 `mcpp:plugins` 的 `rules-qt` 使用 |
+| Qt 6.11.1（官方 msvc2022_64 预编译包，MSVC ABI；mcpp 默认的 clang 工具链直接使用） | 根目录 `mcpp.toml` 声明的 `xim:qt-base` 6.11.1（qtbase、qttools、qttranslations 与 VC++ 运行库），各成员继承，由 `mcpp:plugins` 的 `rules-qt` 使用 |
 | vcpkg 与 `vcpkg.json` 中的库 | `mcpp:plugins` 的 `deps-vcpkg`（xim:vcpkg），首次构建时安装 |
 | ElaWidgetTools | `mcpp:plugins` 的 `deps-cmake`，由构建按子模块源码编译 |
 | 7z.dll | xim:7zip |
@@ -52,8 +52,8 @@ mcpp build -p GPPGUI --profile fast-release
 
 > 注：以下各项均可按需配置，不配置时使用上文的默认来源。
 >
-> - **Qt**：默认使用各成员声明的 `xim:qt-base`。要改用本机已有的 Qt（MSVC 2022 64-bit 版），先注释掉 `GalTranslPP`、`GPPCLI`、
->   `GPPGUI`、`Updater` 四个成员 `mcpp.toml` 中的 `"xim:qt-base" = "6.11.1"`（只要声明了，构建就会下载它），再选一种方式指定路径：
+> - **Qt**：默认使用根目录 `mcpp.toml` 声明的 `xim:qt-base`，各成员继承。要改用本机已有的 Qt（MSVC 2022 64-bit 版），先注释掉根目录 `mcpp.toml` 中的
+>   `"xim:qt-base" = "6.11.1"`（只要声明了，构建就会下载它），再选一种方式指定路径：
 >   设置环境变量 `QT_ROOT_DIR`（如 `D:\Qt\6.11.1\msvc2022_64`），或在 `mcpp-build-scripts/src/build.cppm` 中设置 `gpp::qt_root`
 >   （各成员的 `build.mcpp` 由 `gpp::qt_options()` 取得它）。后者优先。
 > - **vcpkg**：默认使用 `xim:vcpkg`。要使用自己的 vcpkg，在 `mcpp-build-scripts/src/build.cppm` 的 `use_vcpkg()` 中设置 `options.root`。
