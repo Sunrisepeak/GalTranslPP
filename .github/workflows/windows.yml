@@ -73,6 +73,15 @@ jobs:
           mkdir -p out
           mcpp build --workspace --profile fast-release 2>&1 | tee out/build.log
 
+      # Whether each shared member was built once in its own directory, and
+      # why a member was compiled in a consumer's graph instead (mcpp#734 E1).
+      - name: shared members (reading)
+        run: |
+          mcpp build -p GPPCLI --profile fast-release -v 2>&1 \
+            | grep -E "workspace-member|Building workspace member|Compiling gpp\." | tee out/shared-members.log || true
+          echo "## Shared members" >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' out/shared-members.log >> "$GITHUB_STEP_SUMMARY"
+
       - name: Save mcpp packages
         if: success() && steps.mcpp-packages.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
