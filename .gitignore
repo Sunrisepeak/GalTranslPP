@@ -3,6 +3,7 @@
 /.vscode/
 
 # Local dependencies and build outputs
+/.xlings/
 /vcpkg_installed/
 /Release/
 target/
@@ -14,6 +15,6 @@ mcpp-generated/
 /Updater/qt_gppupdater_en.qm
 mcpp.lock
 
-# Files populated by Release.py
+# Left by the manual steps of earlier versions
 /Example/BaseConfig/opencc/
 /Example/BaseConfig/Python-3.12.10-embed-amd64/
