@@ -140,12 +140,14 @@ jobs:
                    .pdb/GalTranslPP_CLI.pdb .pdb/GalTranslPP_GUI.pdb; do
             test -f "Release/$f" || { echo "::error::missing Release/$f"; exit 1; }
           done
-          # OpenCC：程序旁的文件与 vcpkg 安装的 share/opencc 完全一致（清单在 gpp-build.ixx 中写明）。
+          # OpenCC：程序旁的文件与 vcpkg 安装的 OpenCC 数据完全一致（清单在 gpp-build.ixx 中写明）。
+          # share/opencc 中另有 vcpkg 放入的 CMake 配置与元数据（*.cmake、copyright、vcpkg*），不属于运行时数据。
           installed=$(find vcpkg_installed -type d -path '*/share/opencc' | head -1)
           [ -n "$installed" ] || { echo "::error::no share/opencc under vcpkg_installed"; exit 1; }
+          data() { find . -type f \( -name '*.json' -o -name '*.ocd2' \) ! -name 'vcpkg*' | sort; }
           for d in GPPCLI GPPGUI GUICORE; do
-            diff <(cd "$installed" && find . -type f | sort) <(cd "Release/$d/BaseConfig/opencc" && find . -type f | sort) ||
-              { echo "::error::Release/$d/BaseConfig/opencc differs from $installed"; exit 1; }
+            diff <(cd "$installed" && data) <(cd "Release/$d/BaseConfig/opencc" && data) ||
+              { echo "::error::Release/$d/BaseConfig/opencc differs from the OpenCC data in $installed"; exit 1; }
           done
           # GUICORE 的全局配置、MeCab 与 Python 由所更新的 GUI 提供，Updater 以 Updater_new.exe 发布；
           # OpenCC 随更新包提供（上游 3.1.2）。
