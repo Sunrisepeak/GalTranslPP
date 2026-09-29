@@ -55,6 +55,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force D:\probe-out\dumps | Out-Null
           $wer = 'HKLM:\SOFTWARE\Microsoft\Windows Error Reporting'
+          "PROBE_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -Path $wer -Force | Out-Null
           New-ItemProperty -Path $wer -Name Disabled -PropertyType DWord -Value 0 -Force | Out-Null
           foreach ($exe in 'clangd.exe', 'mcppls.exe') {
             $key = "$wer\LocalDumps\$exe"
