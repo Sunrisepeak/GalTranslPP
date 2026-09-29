@@ -1,0 +1,17 @@
+[package]
+namespace = "gpp"
+name = "build"
+version = "1.0.0"
+standard = "c++23"
+license = "Apache-2.0"
+
+[lib]
+path = "gpp-build.ixx"
+
+[build]
+sources = ["gpp-build.ixx"]
+module_extensions = [".ixx"]
+
+[build-dependencies]
+# 将插件的宿主模块提供给使用 gpp.build 的构建脚本，各成员无需重复声明。
+mcpp.plugins = { version = "0.17.0", features = ["deps-vcpkg", "deps-cmake", "deps-archive", "rules-qt"], host-module = true, reexport = true }

@@ -965,7 +965,7 @@ No problem overview
         <translation>Generated [ProblemOverview.%1] file</translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="554"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="574"/>
         <source>
 
 ```
@@ -978,7 +978,12 @@ Problem overview:
 </translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="579"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="606"/>
+        <source>%1 个文件</source>
+        <translation>%1 files</translation>
+    </message>
+    <message>
+        <location filename="NormalJsonTranslator.Run.cpp" line="613"/>
         <source>问题概览结束
 ```
 </source>
@@ -987,17 +992,17 @@ Problem overview:
 </translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="590"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="624"/>
         <source>rolling context 缓存已保存至 [%1]</source>
         <translation>rolling context cache saved to [%1]</translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="595"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="629"/>
         <source>rolling context 缓存 [%1] 保存失败</source>
         <translation>Failed to save rolling context cache [%1]</translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="604"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="638"/>
         <source>重建过程中有句子未命中缓存 (%1 / %2 lines)，请检查日志以定位问题</source>
         <translation>Cache misses during rebuild (%1/%2 lines); see logs</translation>
     </message>
@@ -1193,7 +1198,7 @@ Problem overview:
 <context>
     <name>NormalJsonTranslator.normalJsonProcessFiles</name>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="636"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="670"/>
         <source>已将 %1 个文件任务分配到线程池，等待处理完成...</source>
         <translation>Assigned %1 file tasks to thread pool; waiting...</translation>
     </message>
@@ -1289,17 +1294,17 @@ Problem overview:
 <context>
     <name>NormalJsonTranslator.resolveRepeatedBlockReferences</name>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="765"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="799"/>
         <source>文件 [%1] 仍有未回填的连续重复块引用，跳过本轮最终输出</source>
         <translation>File [%1] has pending repeat-block refs; final output skipped</translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="830"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="864"/>
         <source>连续重复块引用回填完成，共复制 (%1 / %2) 句</source>
         <translation>Repeat-block fill done: copied %1/%2 lines</translation>
     </message>
     <message>
-        <location filename="NormalJsonTranslator.Run.cpp" line="844"/>
+        <location filename="NormalJsonTranslator.Run.cpp" line="878"/>
         <source>文件 [%1] 尚未翻译完毕或分割输出尚未全部回填完成，跳过本轮合并</source>
         <translation>File [%1] incomplete or split output pending; merge skipped</translation>
     </message>
@@ -2297,7 +2302,7 @@ Problem overview:
 <context>
     <name>chooseCachePart</name>
     <message>
-        <location filename="Tool.cpp" line="791"/>
+        <location filename="Tool.cpp" line="784"/>
         <source>无效的 CachePart 名称: %1</source>
         <translation>Invalid CachePart Name %1</translation>
     </message>
@@ -2305,7 +2310,7 @@ Problem overview:
 <context>
     <name>chooseStringRef</name>
     <message>
-        <location filename="Tool.cpp" line="774"/>
+        <location filename="Tool.cpp" line="767"/>
         <source>无法获取字符串的条件目标 %1</source>
         <oldsource>无法获取字符串的无效条件目标 %1</oldsource>
         <translation>Invalid string target %1</translation>
@@ -2332,17 +2337,17 @@ Problem overview:
 <context>
     <name>countGraphemes</name>
     <message>
-        <location filename="Tool.cpp" line="226"/>
+        <location filename="Tool.cpp" line="219"/>
         <source>打开 UTF-8 文本失败: %1</source>
         <translation>Failed to open UTF-8 text: %1</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="235"/>
+        <location filename="Tool.cpp" line="228"/>
         <source>创建字符边界迭代器失败: %1</source>
         <translation>Failed to create character boundary iterator: %1</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="241"/>
+        <location filename="Tool.cpp" line="234"/>
         <source>设置字符边界迭代文本失败: %1</source>
         <translation>Failed to set character boundary iterator text: %1</translation>
     </message>
@@ -2382,7 +2387,7 @@ Problem overview:
 <context>
     <name>json2Toml</name>
     <message>
-        <location filename="Tool.ixx" line="395"/>
+        <location filename="Tool.ixx" line="393"/>
         <source>不支持的 JSON 数据类型: %1</source>
         <translation>Unsupported JSON data type: %1</translation>
     </message>
@@ -2390,12 +2395,12 @@ Problem overview:
 <context>
     <name>loadTokenizeCache</name>
     <message>
-        <location filename="Tool.cpp" line="1072"/>
+        <location filename="Tool.cpp" line="1065"/>
         <source>未找到分词缓存 [%1]</source>
         <translation>Tokenize cache [%1] not found</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="1078"/>
+        <location filename="Tool.cpp" line="1071"/>
         <source>读取分词缓存 [%1] 失败: %2</source>
         <translation>Failed to read tokenize cache [%1]: %2</translation>
     </message>
@@ -2419,12 +2424,12 @@ Problem overview:
 <context>
     <name>parseToml</name>
     <message>
-        <location filename="Tool.ixx" line="269"/>
+        <location filename="Tool.ixx" line="267"/>
         <source>无效的 TOML 路径: %1</source>
         <translation>Invalid TOML path: %1</translation>
     </message>
     <message>
-        <location filename="Tool.ixx" line="287"/>
+        <location filename="Tool.ixx" line="285"/>
         <source>无法在 TOML 中找到值: %1</source>
         <translation>Value not found in TOML: %1</translation>
     </message>
@@ -2432,12 +2437,12 @@ Problem overview:
 <context>
     <name>saveTokenizeCache</name>
     <message>
-        <location filename="Tool.cpp" line="1090"/>
+        <location filename="Tool.cpp" line="1083"/>
         <source>分词缓存已保存到 [%1]</source>
         <translation>Tokenize cache saved to [%1]</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="1095"/>
+        <location filename="Tool.cpp" line="1088"/>
         <source>分词缓存 [%1] 保存失败</source>
         <translation>Failed to save tokenize cache [%1]</translation>
     </message>
@@ -2445,17 +2450,17 @@ Problem overview:
 <context>
     <name>splitIntoGraphemes</name>
     <message>
-        <location filename="Tool.cpp" line="177"/>
+        <location filename="Tool.cpp" line="170"/>
         <source>打开 UTF-8 文本失败: %1</source>
         <translation>Failed to open UTF-8 text: %1</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="187"/>
+        <location filename="Tool.cpp" line="180"/>
         <source>创建字符边界迭代器失败: %1</source>
         <translation>Failed to create character boundary iterator: %1</translation>
     </message>
     <message>
-        <location filename="Tool.cpp" line="194"/>
+        <location filename="Tool.cpp" line="187"/>
         <source>设置字符边界迭代文本失败: %1</source>
         <translation>Failed to set character boundary iterator text: %1</translation>
     </message>
@@ -2471,7 +2476,7 @@ Problem overview:
 <context>
     <name>splitTsvLine</name>
     <message>
-        <location filename="Tool.cpp" line="111"/>
+        <location filename="Tool.cpp" line="104"/>
         <source>内部错误: TSV 行切分不允许使用空分隔符</source>
         <translation>TSV split cannot use empty delimiter</translation>
     </message>
@@ -2487,7 +2492,7 @@ Problem overview:
 <context>
     <name>toml2Json</name>
     <message>
-        <location filename="Tool.ixx" line="355"/>
+        <location filename="Tool.ixx" line="353"/>
         <source>不支持的 TOML 数据类型: %1</source>
         <translation>Unsupported TOML data type: %1</translation>
     </message>
