@@ -206,7 +206,7 @@ jobs:
           python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/check
           export MCPPLS_CACHE_DIR=D:/mcppls-cache/check
           mkdir -p "$OUT/e-check"; root="$(pwd -W)"
-          timeout 1500 "$MCPPLS" check "$root/$RUN_FILE" --root "$root" --payload "$PAYLOAD" --log-level debug > "$OUT/e-check/check.log" 2>&1; code=$?
+          timeout 1500 "$MCPPLS" check "$root/$RUN_FILE" --root "$root" --payload "$PAYLOAD" --log-level debug --producer-timeout 600 > "$OUT/e-check/check.log" 2>&1; code=$?
           python "$PROBE" log --log "$OUT/e-check/check.log" --exit-code $code --out "$OUT/e-check"
           exit 0
 
@@ -243,7 +243,7 @@ jobs:
         run: |
           set +e
           mkdir -p "$OUT/e-bundle"
-          MCPPLS_CACHE_DIR=D:/mcppls-cache/typing-autosave timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 300 --payload "$PAYLOAD" \
+          MCPPLS_CACHE_DIR=D:/mcppls-cache/typing-autosave timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 300 --producer-timeout 600 --payload "$PAYLOAD" \
             --bundle "$OUT/e-bundle/bundle.zip" --no-redact > "$OUT/e-bundle/report.txt" 2> "$OUT/e-bundle/stderr.log"
 
       - name: Collect logs, databases, dumps and the event log
