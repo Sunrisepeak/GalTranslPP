@@ -76,7 +76,9 @@ jobs:
       # The workspace is one graph: the core library is compiled in one build
       # directory, which every member links from, and no member directory
       # holds a build of its own (mcpp 2026.9.29.1). Each member's resource
-      # script is compiled for that member (mcpp 2026.9.29.2).
+      # script is compiled for that member (mcpp 2026.9.29.2), and the updater
+      # GPPGUI ships through `artifacts` is placed with its runtime files
+      # (mcpp 2026.9.29.3).
       - name: core library compiled once
         run: |
           set -uo pipefail
@@ -94,6 +96,9 @@ jobs:
             echo "    compiled resource scripts named $rc: $n" | tee -a out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
             [ "$n" -ge 1 ] || { echo "::error::$rc.rc was not compiled"; exit 1; }
           done
+          gui=$(dirname "$(find target -path '*/bin/gui/GalTranslPP_GUI.exe' | head -1)")
+          [ -f "$gui/Updater.exe" ] || { echo "::error::Updater.exe is not beside the GUI program in $gui"; exit 1; }
+          echo "    the updater beside the GUI program: $gui/Updater.exe" | tee -a out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save mcpp packages
         if: success() && steps.mcpp-packages.outputs.cache-hit != 'true'
