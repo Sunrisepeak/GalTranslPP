@@ -73,14 +73,27 @@ jobs:
           mkdir -p out
           mcpp build --workspace --profile fast-release 2>&1 | tee out/build.log
 
-      # Whether each shared member was built once in its own directory, and
-      # why a member was compiled in a consumer's graph instead (mcpp#734 E1).
-      - name: shared members (reading)
+      # The workspace is one graph: the core library is compiled in one build
+      # directory, which every member links from, and no member directory
+      # holds a build of its own (mcpp 2026.9.29.1). Each member's resource
+      # script is compiled for that member (mcpp 2026.9.29.2).
+      - name: core library compiled once
         run: |
-          mcpp build -p GPPCLI --profile fast-release -v 2>&1 \
-            | grep -E "workspace-member|Building workspace member|Compiling gpp\." | tee out/shared-members.log || true
-          echo "## Shared members" >> "$GITHUB_STEP_SUMMARY"
-          sed 's/^/    /' out/shared-members.log >> "$GITHUB_STEP_SUMMARY"
+          set -uo pipefail
+          core=$(find target -type d -path '*/obj/gpp_core' | wc -l)
+          own=$(find GalTranslPP GPPCLI GPPGUI Updater GPPVersion -path '*/target/*' -name build.ninja 2>/dev/null | wc -l)
+          {
+            echo "## Compiled once"
+            echo "    build directories holding the core library's objects: $core"
+            echo "    member build directories: $own"
+          } | tee out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
+          [ "$core" = 1 ] || { echo "::error::the core library was compiled in $core build directories"; exit 1; }
+          [ "$own" = 0 ] || { echo "::error::a member built in its own directory"; exit 1; }
+          for rc in GPPCLI GPPGUI Updater; do
+            n=$(find target -path '*/res/*' \( -name "$rc.res" -o -name "$rc.o" \) | wc -l)
+            echo "    compiled resource scripts named $rc: $n" | tee -a out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
+            [ "$n" -ge 1 ] || { echo "::error::$rc.rc was not compiled"; exit 1; }
+          done
 
       - name: Save mcpp packages
         if: success() && steps.mcpp-packages.outputs.cache-hit != 'true'
