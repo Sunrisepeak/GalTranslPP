@@ -78,7 +78,7 @@ jobs:
       # holds a build of its own (mcpp 2026.9.29.1). Each member's resource
       # script is compiled for that member (mcpp 2026.9.29.2), and the updater
       # GPPGUI ships through `artifacts` is placed with its runtime files
-      # (mcpp 2026.9.29.3).
+      # (mcpp 2026.9.29.3), linked with its own closure (mcpp 2026.9.29.4).
       - name: core library compiled once
         run: |
           set -uo pipefail
