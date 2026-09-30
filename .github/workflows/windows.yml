@@ -1,0 +1,216 @@
+# 按 how-to-build.md 在 Windows 上构建、运行与打包：除 xlings 与 runner 自带的 VS Build Tools 外不预装任何依赖。
+# 构建不写 Release；`mcpp pack --format release` 写出的发布目录与此前的布局一致，程序可以启动。
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XLINGS_NON_INTERACTIVE: '1'
+  PYTHONUTF8: '1'
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install xlings
+        shell: pwsh
+        run: |
+          irm https://raw.githubusercontent.com/openxlings/xlings/main/tools/other/quick_install.ps1 | iex
+          "$env:USERPROFILE\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:USERPROFILE\.xlings\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install mcpp (.xlings.json)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            xlings update > /dev/null 2>&1 || true
+            if xlings install -y; then break; fi
+            [ "$attempt" = 3 ] && { echo "::error::xlings install failed"; exit 1; }
+            sleep 30
+          done
+          mcpp --version
+          mcpp self config --mirror GLOBAL
+
+      # 构建步骤结束后立即保存缓存：vcpkg 的二进制包在构建失败时也保存，取消时不保存。
+      - name: Restore mcpp packages
+        id: mcpp-packages
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: mcpp-xpkgs-${{ hashFiles('.xlings.json', 'mcpp.toml', 'mcpp-build-scripts/*/mcpp.toml') }}
+          restore-keys: mcpp-xpkgs-
+
+      # vcpkg 的二进制缓存、下载与注册表目录；首次安装全部依赖耗时最长。构建中间目录不缓存。
+      - name: Restore vcpkg binaries
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+            ~/AppData/Local/vcpkg/downloads
+            ~/AppData/Local/vcpkg/registries
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
+          restore-keys: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-
+
+      - name: mcpp build --workspace
+        run: |
+          set -o pipefail
+          mkdir -p out
+          mcpp build --workspace --profile fast-release 2>&1 | tee out/build.log
+
+      # The workspace is one graph: the core library is compiled in one build
+      # directory, which every member links from, and no member directory
+      # holds a build of its own (mcpp 2026.9.29.1). Each member's resource
+      # script is compiled for that member (mcpp 2026.9.29.2), and the updater
+      # GPPGUI ships through `artifacts` is placed with its runtime files
+      # (mcpp 2026.9.29.3), linked with its own closure (mcpp 2026.9.29.4).
+      - name: core library compiled once
+        run: |
+          set -uo pipefail
+          core=$(find target -type d -path '*/obj/gpp_core' | wc -l)
+          own=$(find GalTranslPP GPPCLI GPPGUI Updater GPPVersion -path '*/target/*' -name build.ninja 2>/dev/null | wc -l)
+          {
+            echo "## Compiled once"
+            echo "    build directories holding the core library's objects: $core"
+            echo "    member build directories: $own"
+          } | tee out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
+          [ "$core" = 1 ] || { echo "::error::the core library was compiled in $core build directories"; exit 1; }
+          [ "$own" = 0 ] || { echo "::error::a member built in its own directory"; exit 1; }
+          for rc in GPPCLI GPPGUI Updater; do
+            n=$(find target -path '*/res/*' \( -name "$rc.res" -o -name "$rc.o" \) | wc -l)
+            echo "    compiled resource scripts named $rc: $n" | tee -a out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
+            [ "$n" -ge 1 ] || { echo "::error::$rc.rc was not compiled"; exit 1; }
+          done
+          gui=$(dirname "$(find target -path '*/bin/gui/GalTranslPP_GUI.exe' | head -1)")
+          [ -f "$gui/Updater.exe" ] || { echo "::error::Updater.exe is not beside the GUI program in $gui"; exit 1; }
+          echo "    the updater beside the GUI program: $gui/Updater.exe" | tee -a out/compiled-once.log >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save mcpp packages
+        if: success() && steps.mcpp-packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: mcpp-xpkgs-${{ hashFiles('.xlings.json', 'mcpp.toml', 'mcpp-build-scripts/*/mcpp.toml') }}
+
+      - name: Save vcpkg binaries
+        if: success() || failure()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+            ~/AppData/Local/vcpkg/downloads
+            ~/AppData/Local/vcpkg/registries
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
+
+      - name: The build writes no Release
+        run: test ! -e Release || { echo "::error::mcpp build wrote Release/"; exit 1; }
+
+      # 标准输入关闭时 CLI 读到 EOF 后退出；能启动即说明运行库、BaseConfig 与嵌入式 Python 齐全。
+      - name: mcpp run -p GPPCLI
+        timeout-minutes: 20
+        run: |
+          set -uo pipefail
+          mcpp run -p GPPCLI --profile fast-release < /dev/null > out/cli-run.log 2>&1
+          status=$?
+          cat out/cli-run.log
+          [ "$status" = 0 ] && grep -q "GalTransl++ CLI v" out/cli-run.log || { echo "::error::mcpp run: the CLI did not start"; exit 1; }
+          if grep -E "Python 环境配置失败|未设置 Python 环境|无法读取全局配置" out/cli-run.log; then
+            echo "::error::mcpp run: the CLI started without its configuration or Python"; exit 1
+          fi
+
+      - name: mcpp pack --format release
+        run: |
+          set -eo pipefail
+          # 在工作区根目录以 -p 选择成员（mcpp 2026.9.28.3 起）。
+          mcpp pack -p GPPCLI --format release --profile fast-release 2>&1 | tee out/pack-cli.log
+          mcpp pack -p GPPGUI --format release --profile fast-release 2>&1 | tee out/pack-gui.log
+
+      - name: Release layout
+        run: |
+          set -euo pipefail
+          find Release -type f | sort > out/release-files.txt
+          for f in GPPCLI/GalTranslPP_CLI.exe GPPCLI/7z.dll GPPCLI/Qt6Core.dll GPPCLI/python3.dll GPPCLI/python312.dll \
+                   GPPCLI/translations/qt_gppcli_en.qm GPPCLI/translations/qt_gpp_en.qm \
+                   GPPCLI/translations/qt_zh_CN.qm GPPCLI/BaseConfig/GlobalConfig.toml \
+                   GPPCLI/BaseConfig/opencc/t2s.json GPPCLI/BaseConfig/Python-3.12.10-embed-amd64/python.exe \
+                   GPPCLI/SampleProject/Config.toml \
+                   GPPGUI/GalTranslPP_GUI.exe GPPGUI/Updater.exe GPPGUI/ElaWidgetTools.dll \
+                   GPPGUI/Qt6Widgets.dll GPPGUI/7z.dll GPPGUI/platforms/qwindows.dll \
+                   GPPGUI/translations/qt_gppgui_en.qm GPPGUI/translations/qt_gppupdater_en.qm \
+                   GPPGUI/translations/qt_zh_CN.qm GPPGUI/BaseConfig/Python-3.12.10-embed-amd64/python.exe \
+                   GUICORE/GalTranslPP_GUI.exe GUICORE/Updater_new.exe GUICORE/BaseConfig/Prompt.toml \
+                   GUICORE/BaseConfig/opencc/t2s.json GUICORE/BaseConfig/opencc/TSPhrases.ocd2 \
+                   .pdb/GalTranslPP_CLI.pdb .pdb/GalTranslPP_GUI.pdb; do
+            test -f "Release/$f" || { echo "::error::missing Release/$f"; exit 1; }
+          done
+          # OpenCC：程序旁的文件与 vcpkg 安装的 OpenCC 数据完全一致（清单在 gpp-build.ixx 中写明）。
+          # share/opencc 中另有 vcpkg 放入的 CMake 配置与元数据（*.cmake、copyright、vcpkg*），不属于运行时数据。
+          installed=$(find vcpkg_installed -type d -path '*/share/opencc' | head -1)
+          [ -n "$installed" ] || { echo "::error::no share/opencc under vcpkg_installed"; exit 1; }
+          data() { find . -type f \( -name '*.json' -o -name '*.ocd2' \) ! -name 'vcpkg*' | sort; }
+          for d in GPPCLI GPPGUI GUICORE; do
+            diff <(cd "$installed" && data) <(cd "Release/$d/BaseConfig/opencc" && data) ||
+              { echo "::error::Release/$d/BaseConfig/opencc differs from the OpenCC data in $installed"; exit 1; }
+          done
+          # GUICORE 的全局配置、MeCab 与 Python 由所更新的 GUI 提供，Updater 以 Updater_new.exe 发布；
+          # OpenCC 随更新包提供（上游 3.1.2）。
+          for f in BaseConfig/GlobalConfig.toml BaseConfig/mecab BaseConfig/Python-3.12.10-embed-amd64 Updater.exe; do
+            test ! -e "Release/GUICORE/$f" || { echo "::error::Release/GUICORE carries $f"; exit 1; }
+          done
+          # cxx_runtime = "host-coupled"：MSVC C++ 运行库由目标机器提供，不在任何程序旁。
+          for d in GPPCLI GPPGUI GUICORE; do
+            crt=$(find "Release/$d" -maxdepth 1 -type f \( -iname 'msvcp140*.dll' -o -iname 'vcruntime140*.dll' -o -iname 'concrt140.dll' \) | sort)
+            [ -z "$crt" ] || { echo "::error::Release/$d carries the MSVC C++ runtime under host-coupled:"; echo "$crt"; exit 1; }
+          done
+          # 每个程序导入的 DLL 都在其旁边或属于 Windows 自身（MSVC C++ 运行库在 runner 的 System32 中）。
+          objdump=$(ls "$HOME"/.mcpp/registry/data/xpkgs/xim-x-llvm/*/bin/llvm-objdump.exe | head -1)
+          for exe in Release/GPPCLI/GalTranslPP_CLI.exe Release/GPPGUI/GalTranslPP_GUI.exe Release/GPPGUI/Updater.exe \
+                     Release/GUICORE/GalTranslPP_GUI.exe Release/GUICORE/Updater_new.exe; do
+            "$objdump" -p "$exe" | sed -n 's/^ *DLL Name: //p' | tr -d '\r' | while read -r dll; do
+              case "$dll" in api-ms-win-*|ext-ms-*) continue ;; esac
+              [ -f "$(dirname "$exe")/$dll" ] || [ -f "/c/Windows/System32/$dll" ] ||
+                { echo "::error::$exe imports $dll, which is neither beside it nor in System32"; exit 1; }
+            done
+          done
+          echo "$(wc -l < out/release-files.txt) files under Release/" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: CLI starts from Release
+        timeout-minutes: 10
+        run: |
+          set -uo pipefail
+          (cd Release/GPPCLI && ./GalTranslPP_CLI.exe < /dev/null) > out/cli-release.log 2>&1
+          status=$?
+          cat out/cli-release.log
+          [ "$status" = 0 ] && grep -q "GalTransl++ CLI v" out/cli-release.log || { echo "::error::Release: the CLI did not start"; exit 1; }
+          if grep -E "Python 环境配置失败|未设置 Python 环境|无法读取全局配置" out/cli-release.log; then
+            echo "::error::Release: the CLI started without its configuration or Python"; exit 1
+          fi
+
+      # 与构建使用同一 profile，复用已有的构建结果。
+      - name: emit build-database after the build
+        run: |
+          start=$(date +%s)
+          mcpp emit build-database --profile fast-release --format json -o out/build-database.json 2> out/emit.log ||
+            { tail -40 out/emit.log; exit 1; }
+          echo "emit after the build: $(( $(date +%s) - start )) s" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-build-logs
+          path: out/
