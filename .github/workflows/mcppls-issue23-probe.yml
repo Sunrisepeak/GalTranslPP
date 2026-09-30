@@ -28,7 +28,7 @@ env:
   MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.6' }}
   # Cross-validation of mcpp-language-server PR #33 (0.0.7): its CI run's payload, with every default of 0.0.7
   # (no --producer-timeout: the producer's deadline follows the project now).
-  MCPPLS_RUN: ${{ inputs.mcppls_run || '36665115762' }}
+  MCPPLS_RUN: ${{ inputs.mcppls_run || '36676795759' }}
   LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
   XLINGS_NON_INTERACTIVE: '1'
   PYTHONUTF8: '1'
