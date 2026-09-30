@@ -1,4 +1,5 @@
-# Temporary, not meant to be merged: runs mcpp-language-server 0.0.6 on this project on Windows, as the reporter
+# Temporary, not meant to be merged: runs mcpp-language-server (a release, or the win32-x64 payload a CI run of
+# Sunrisepeak/mcpp-language-server built -- the 0.0.7 candidate of PR #33) on this project on Windows, as the reporter
 # runs it (mcpp from .xlings.json, LLVM 22.1.8, MSVC STL, Qt 6.11.1, vcpkg), to reproduce three reports:
 #   1. NormalJsonTranslator.Run.cpp: "No member named 'views' in namespace 'std'" although the project builds
 #   2. brace initializers of nlohmann json flagged as errors
@@ -13,8 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       mcppls_version:
-        description: The mcpp-language-server release whose win32-x64 payload is probed
+        description: The mcpp-language-server release whose win32-x64 payload is probed (when no run is given)
         default: '0.0.6'
+      mcppls_run:
+        description: A CI run of Sunrisepeak/mcpp-language-server whose payload-win32-x64 artifact is probed instead
+        default: ''
 
 concurrency:
   group: mcppls-probe-${{ github.ref }}
@@ -22,6 +26,9 @@ concurrency:
 
 env:
   MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.6' }}
+  # Cross-validation of mcpp-language-server PR #33 (0.0.7): its CI run's payload, with every default of 0.0.7
+  # (no --producer-timeout: the producer's deadline follows the project now).
+  MCPPLS_RUN: ${{ inputs.mcppls_run || '36649544736' }}
   LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
   XLINGS_NON_INTERACTIVE: '1'
   PYTHONUTF8: '1'
@@ -135,14 +142,26 @@ jobs:
             ~/AppData/Local/vcpkg/registries
           key: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
 
-      - name: mcppls ${{ env.MCPPLS_VERSION }} (the win32-x64 payload the VS Code extension carries)
+      - name: mcppls (the win32-x64 payload the VS Code extension carries; a CI run's when MCPPLS_RUN is set)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          base="https://github.com/Sunrisepeak/mcpp-language-server/releases/download/v$MCPPLS_VERSION"
           mkdir -p /c/mcppls && cd /c/mcppls
-          curl -fsSL --retry 3 -o payload-win32-x64.tar.gz "$base/payload-win32-x64.tar.gz"
-          curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
-          grep 'payload-win32-x64.tar.gz' SHA256SUMS | sha256sum -c -
+          if [ -n "$MCPPLS_RUN" ]; then
+            # The candidate's CI builds the payload early; wait for it if this job got here first.
+            for attempt in $(seq 1 60); do
+              if gh run download "$MCPPLS_RUN" -R Sunrisepeak/mcpp-language-server -n payload-win32-x64 -D . 2>/dev/null; then break; fi
+              echo "payload-win32-x64 of run $MCPPLS_RUN not there yet ($attempt)"; sleep 60
+            done
+            test -f payload-win32-x64.tar.gz
+            gh run view "$MCPPLS_RUN" -R Sunrisepeak/mcpp-language-server --json headSha,headBranch,url | tee "$OUT/mcppls-run.json"
+          else
+            base="https://github.com/Sunrisepeak/mcpp-language-server/releases/download/v$MCPPLS_VERSION"
+            curl -fsSL --retry 3 -o payload-win32-x64.tar.gz "$base/payload-win32-x64.tar.gz"
+            curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
+            grep 'payload-win32-x64.tar.gz' SHA256SUMS | sha256sum -c -
+          fi
           tar -xzf payload-win32-x64.tar.gz
           exe=$(find . -name mcppls.exe | head -1)
           payload=$(cd "$(dirname "$exe")/.." && pwd -W)
@@ -157,7 +176,8 @@ jobs:
         continue-on-error: true
         run: python "$LAB" ninja --target target --out "$OUT/build-commands"
 
-      # mcppls runs this producer itself, with a 60 s limit; the release profile is the reporter's default.
+      # mcppls runs this producer itself (0.0.6: a 60 s limit; 0.0.7: 5 minutes the first time, then 3x the last run);
+      # the release profile is the reporter's default.
       - name: mcpp emit build-database (release = the default profile; then fast-release, which the sessions use)
         run: |
           set +e
@@ -206,7 +226,7 @@ jobs:
           python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/check
           export MCPPLS_CACHE_DIR=D:/mcppls-cache/check
           mkdir -p "$OUT/e-check"; root="$(pwd -W)"
-          timeout 1500 "$MCPPLS" check "$root/$RUN_FILE" --root "$root" --payload "$PAYLOAD" --log-level debug --producer-timeout 600 > "$OUT/e-check/check.log" 2>&1; code=$?
+          timeout 1500 "$MCPPLS" check "$root/$RUN_FILE" --root "$root" --payload "$PAYLOAD" --log-level debug > "$OUT/e-check/check.log" 2>&1; code=$?
           python "$PROBE" log --log "$OUT/e-check/check.log" --exit-code $code --out "$OUT/e-check"
           exit 0
 
@@ -243,7 +263,7 @@ jobs:
         run: |
           set +e
           mkdir -p "$OUT/e-bundle"
-          MCPPLS_CACHE_DIR=D:/mcppls-cache/typing-autosave timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 300 --producer-timeout 600 --payload "$PAYLOAD" \
+          MCPPLS_CACHE_DIR=D:/mcppls-cache/typing-autosave timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 300 --payload "$PAYLOAD" \
             --bundle "$OUT/e-bundle/bundle.zip" --no-redact > "$OUT/e-bundle/report.txt" 2> "$OUT/e-bundle/stderr.log"
 
       - name: Collect logs, databases, dumps and the event log

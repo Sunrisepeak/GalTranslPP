@@ -82,7 +82,7 @@ def start(args, cache_dir, out, name="server"):
     out.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["MCPPLS_CACHE_DIR"] = cache_dir
-    argv = [args.mcppls, "serve", "--payload", args.payload, "--log-level", "debug", "--producer-timeout", "600"]
+    argv = [args.mcppls, "serve", "--payload", args.payload, "--log-level", "debug"]
     t0 = now()
     lab = Lab(argv, str(root), out / f"{name}-stderr.log", env, t0)
     init = lab.request("initialize", {
