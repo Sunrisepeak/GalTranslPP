@@ -1,0 +1,297 @@
+# Temporary, not meant to be merged: runs mcpp-language-server (a release, or the win32-x64 payload a CI run of
+# Sunrisepeak/mcpp-language-server built -- the 0.0.7 candidate of PR #33) on this project on Windows, as the reporter
+# runs it (mcpp from .xlings.json, LLVM 22.1.8, MSVC STL, Qt 6.11.1, vcpkg), to reproduce three reports:
+#   1. NormalJsonTranslator.Run.cpp: "No member named 'views' in namespace 'std'" although the project builds
+#   2. brace initializers of nlohmann json flagged as errors
+#   3. completion is slow, something dies about every 30 s while typing, the status stays at "preparing",
+#      and only deleting the cache helps.
+# Every experiment writes its evidence under D:/probe-out, uploaded as the `mcppls-issue23-probe` artifact;
+# the job summary has the table.
+name: mcppls issue-23 probe
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mcppls_version:
+        description: The mcpp-language-server release whose win32-x64 payload is probed (when no run is given)
+        default: '0.0.6'
+      mcppls_run:
+        description: A CI run of Sunrisepeak/mcpp-language-server whose payload-win32-x64 artifact is probed instead
+        default: ''
+
+concurrency:
+  group: mcppls-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.6' }}
+  # Cross-validation of mcpp-language-server PR #33 (0.0.7): its CI run's payload, with every default of 0.0.7
+  # (no --producer-timeout: the producer's deadline follows the project now).
+  MCPPLS_RUN: ${{ inputs.mcppls_run || '36773996351' }}
+  LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
+  XLINGS_NON_INTERACTIVE: '1'
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  OUT: D:/probe-out
+  PROBE: .github/mcppls-probe/probe.py
+  LAB: .github/mcppls-probe/lab.py
+  RUN_FILE: GalTranslPP/NormalJsonTranslator.Run.cpp
+  # Heavy files: the one reported, its siblings, one with json brace initializers, and the module's interface unit.
+  DIAG_FILES: >-
+    GalTranslPP/NormalJsonTranslator.Run.cpp GalTranslPP/NormalJsonTranslator.Core.cpp
+    GalTranslPP/NormalJsonTranslator.TransAgent.cpp GalTranslPP/NormalJsonTranslator.Batch.cpp
+    GalTranslPP/NormalJsonTranslator.File.cpp GalTranslPP/NormalJsonTranslatorHelperTool.cpp
+    GalTranslPP/NormalJsonTranslator.ixx
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # LLVM's own crash handler writes a minidump where LocalDumps says, as WER does.
+      - name: Crash dumps for clangd and mcppls
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force D:\probe-out\dumps | Out-Null
+          $wer = 'HKLM:\SOFTWARE\Microsoft\Windows Error Reporting'
+          "PROBE_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -Path $wer -Force | Out-Null
+          New-ItemProperty -Path $wer -Name Disabled -PropertyType DWord -Value 0 -Force | Out-Null
+          foreach ($exe in 'clangd.exe', 'mcppls.exe') {
+            $key = "$wer\LocalDumps\$exe"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value 'D:\probe-out\dumps' -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 20 -Force | Out-Null
+          }
+          "PROBE_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install xlings
+        shell: pwsh
+        run: |
+          irm https://raw.githubusercontent.com/openxlings/xlings/main/tools/other/quick_install.ps1 | iex
+          "$env:USERPROFILE\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:USERPROFILE\.xlings\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install mcpp (.xlings.json)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            xlings update > /dev/null 2>&1 || true
+            if xlings install -y; then break; fi
+            [ "$attempt" = 3 ] && { echo "::error::xlings install failed"; exit 1; }
+            sleep 30
+          done
+          mcpp --version
+          mcpp self config --mirror GLOBAL
+
+      - name: Restore mcpp packages
+        id: mcpp-packages
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: probe2-mcpp-xpkgs-${{ hashFiles('.xlings.json', 'mcpp.toml', 'mcpp-build-scripts/*/mcpp.toml') }}
+          restore-keys: probe2-mcpp-xpkgs-
+
+      - name: Restore vcpkg binaries
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+            ~/AppData/Local/vcpkg/downloads
+            ~/AppData/Local/vcpkg/registries
+          key: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
+          restore-keys: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-
+
+      # The real build, the reference for "the project builds": the same workspace, fast-release (only the optimizer
+      # and LTO differ from the reporter's release build).
+      - name: mcpp build --workspace (the reference)
+        continue-on-error: true
+        timeout-minutes: 150
+        run: |
+          set +e
+          mkdir -p "$OUT/build"; start=$SECONDS
+          mcpp build --workspace --profile fast-release 2>&1 | tee "$OUT/build/build.log"
+          code=${PIPESTATUS[0]}
+          echo "{\"exitCode\": $code, \"seconds\": $((SECONDS - start))}" > "$OUT/build/summary.json"
+          cat "$OUT/build/summary.json"
+          exit 0
+
+      - name: Save mcpp packages
+        if: always() && steps.mcpp-packages.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: probe2-mcpp-xpkgs-${{ hashFiles('.xlings.json', 'mcpp.toml', 'mcpp-build-scripts/*/mcpp.toml') }}
+
+      - name: Save vcpkg binaries
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+            ~/AppData/Local/vcpkg/downloads
+            ~/AppData/Local/vcpkg/registries
+          key: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
+
+      - name: mcppls (the win32-x64 payload the VS Code extension carries; a CI run's when MCPPLS_RUN is set)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /c/mcppls && cd /c/mcppls
+          if [ -n "$MCPPLS_RUN" ]; then
+            # The candidate's CI builds the payload early; wait for it if this job got here first.
+            for attempt in $(seq 1 60); do
+              if gh run download "$MCPPLS_RUN" -R Sunrisepeak/mcpp-language-server -n payload-win32-x64 -D . 2>/dev/null; then break; fi
+              echo "payload-win32-x64 of run $MCPPLS_RUN not there yet ($attempt)"; sleep 60
+            done
+            test -f payload-win32-x64.tar.gz
+            gh run view "$MCPPLS_RUN" -R Sunrisepeak/mcpp-language-server --json headSha,headBranch,url | tee "$OUT/mcppls-run.json"
+          else
+            base="https://github.com/Sunrisepeak/mcpp-language-server/releases/download/v$MCPPLS_VERSION"
+            curl -fsSL --retry 3 -o payload-win32-x64.tar.gz "$base/payload-win32-x64.tar.gz"
+            curl -fsSL --retry 3 -o SHA256SUMS "$base/SHA256SUMS"
+            grep 'payload-win32-x64.tar.gz' SHA256SUMS | sha256sum -c -
+          fi
+          tar -xzf payload-win32-x64.tar.gz
+          exe=$(find . -name mcppls.exe | head -1)
+          payload=$(cd "$(dirname "$exe")/.." && pwd -W)
+          echo "PAYLOAD=$payload" >> "$GITHUB_ENV"
+          echo "MCPPLS=$payload/bin/mcppls.exe" >> "$GITHUB_ENV"
+          echo "CLANGD=$payload/clangd/bin/clangd.exe" >> "$GITHUB_ENV"
+          "$payload/bin/mcppls.exe" --version
+          "$payload/clangd/bin/clangd.exe" --version
+
+      # What the real build did for std and for Run.cpp, from the files mcpp wrote.
+      - name: The build's own commands (std, Run.cpp)
+        continue-on-error: true
+        run: python "$LAB" ninja --target target --out "$OUT/build-commands"
+
+      # mcppls runs this producer itself (0.0.6: a 60 s limit; 0.0.7: 5 minutes the first time, then 3x the last run);
+      # the release profile is the reporter's default.
+      - name: mcpp emit build-database (release = the default profile; then fast-release, which the sessions use)
+        run: |
+          set +e
+          for kind in emit-release-cold emit-release; do
+            mkdir -p "$OUT/$kind"; start=$SECONDS
+            mcpp emit build-database --format json > "$OUT/$kind/build-database.json" 2> "$OUT/$kind/stderr.log"; code=$?
+            python "$PROBE" emit --json "$OUT/$kind/build-database.json" --exit-code $code --seconds $((SECONDS - start)) --out "$OUT/$kind"
+            tail -n 15 "$OUT/$kind/stderr.log"
+          done
+          # The sessions read the profile the reference build made (its generated files are on disk).
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+          mkdir -p "$OUT/emit"; start=$SECONDS
+          mcpp emit build-database --format json > "$OUT/emit/build-database.json" 2> "$OUT/emit/stderr.log"; code=$?
+          python "$PROBE" emit --json "$OUT/emit/build-database.json" --exit-code $code --seconds $((SECONDS - start)) --out "$OUT/emit"
+          exit 0
+
+      # E-diag + E-latency: cold cache, the files open, diagnostics settle; requests while preparing and when idle.
+      - name: E-diag and E-latency (cold cache)
+        continue-on-error: true
+        timeout-minutes: 60
+        run: |
+          set +e
+          python "$LAB" diag --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag \
+            --root "$(pwd -W)" --out "$OUT/e-diag" --files $DIAG_FILES --max-wait 2700 --quiet 60
+          cdb=$(ls -d D:/mcppls-cache/diag/workspaces/*/contexts/default/cdb | head -n 1)
+          echo "DIAG_CDB=$cdb" >> "$GITHUB_ENV"
+          python "$LAB" cdb --cdb "$cdb" --out "$OUT/e-cdb"
+          python "$PROBE" cdb-stats --cdb "$cdb" --out "$OUT/cdb-diag"
+
+      # The hypothesis of the static analysis: mcppls builds std with the units' -D, which include -D_RANGES_
+      # (MSVC <ranges> is `#ifndef _RANGES_`): std would then lack std::views. Tried with the LLVM the project builds with.
+      - name: E-hyp (std built with and without -D_RANGES_)
+        continue-on-error: true
+        run: |
+          set +e
+          clang=$(find ~/.mcpp/registry/data/xpkgs/xim-x-llvm -name clang++.exe -path '*/bin/*' | head -n 1)
+          echo "clang: $clang"
+          python "$LAB" hyp --cdb "$DIAG_CDB" --clang "$clang" --root "$(pwd -W)" --out "$OUT/hyp"
+
+      # clangd --check as `mcppls check` runs it, on a warm copy of the cache.
+      - name: E-check (mcppls check Run.cpp)
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/check
+          export MCPPLS_CACHE_DIR=D:/mcppls-cache/check
+          mkdir -p "$OUT/e-check"; root="$(pwd -W)"
+          timeout 1500 "$MCPPLS" check "$root/$RUN_FILE" --root "$root" --payload "$PAYLOAD" --log-level debug > "$OUT/e-check/check.log" 2>&1; code=$?
+          python "$PROBE" log --log "$OUT/e-check/check.log" --exit-code $code --out "$OUT/e-check"
+          exit 0
+
+      # E-typing: ten edits a second for a few minutes, completion interleaved, broken code, a half-typed import.
+      # A warm cache; first as VS Code is by default (no autosave), then with autosave after 1 s.
+      - name: E-typing (warm cache; no autosave, then autosave)
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          root="$(pwd -W)"
+          for mode in plain autosave; do
+            python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/typing-$mode
+            flag=""; [ "$mode" = autosave ] && flag="--autosave"
+            python "$LAB" typing --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/typing-$mode \
+              --root "$root" --out "$OUT/e-typing-$mode" --duration 200 --also GalTranslPP/NormalJsonTranslator.TransAgent.cpp $flag
+            git checkout -- GalTranslPP
+            sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+          done
+
+      # E-warm: start again on the same cache; kill clangd or the server in the middle of preparation.
+      - name: E-warm (restart; kill in the middle of preparation)
+        continue-on-error: true
+        timeout-minutes: 150
+        run: |
+          set +e
+          python "$LAB" warm --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag --work-dir D:/mcppls-cache \
+            --root "$(pwd -W)" --out "$OUT/e-warm" --wait 480 --stall 150 --kill-after 3
+
+      # The bundle a user would attach, from a fresh start on the cache the typing left.
+      - name: mcppls report --bundle
+        continue-on-error: true
+        timeout-minutes: 25
+        run: |
+          set +e
+          mkdir -p "$OUT/e-bundle"
+          MCPPLS_CACHE_DIR=D:/mcppls-cache/typing-autosave timeout 1200 "$MCPPLS" report --root "$(pwd -W)" --settle 300 --payload "$PAYLOAD" \
+            --bundle "$OUT/e-bundle/bundle.zip" --no-redact > "$OUT/e-bundle/report.txt" 2> "$OUT/e-bundle/stderr.log"
+
+      - name: Collect logs, databases, dumps and the event log
+        if: always()
+        shell: pwsh
+        run: |
+          $out = 'D:\probe-out'
+          # mcppls's caches without clangd's index and BMIs; the databases clangd was given.
+          robocopy D:\mcppls-cache "$out\mcppls-cache" /E /XD .cache index modules /XF *.pcm *.pch /NFL /NDL /NJH /NJS | Out-Null
+          $since = [datetime]::Parse($env:PROBE_STARTED)
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', 'Application Hang' } |
+            Format-List TimeCreated, ProviderName, Id, Message | Out-File "$out\application-events.txt" -Encoding utf8
+          Get-ChildItem "$out\dumps" -ErrorAction SilentlyContinue | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          python "$LAB" summarize --out "$OUT" >> "$GITHUB_STEP_SUMMARY"
+          for f in "$OUT"/build/summary.json "$OUT"/emit-release/summary.json "$OUT"/emit/summary.json "$OUT"/e-check/summary.json; do
+            [ -f "$f" ] && { echo; echo "**$f**"; echo '```'; head -c 2500 "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mcppls-issue23-probe
+          path: D:/probe-out
+          retention-days: 14

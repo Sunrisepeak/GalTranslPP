@@ -6,18 +6,16 @@ import gpp.build;
 int main() {
     return gpp::run_build_script([] {
         gpp::configure_executable_link_options();
-        const auto vcpkg_directory = gpp::configure_vcpkg();
+        gpp::configure_vcpkg();
 
         auto qt_options = gpp::make_qt_options({"Core", "Gui", "Network", "Widgets"});
         qt_options.resources = {"GPPGUI.qrc"};
-        // deploy_plugins 在共享配置中为空；Qt 动态插件由用户手动部署。
-        const auto translation_file = gpp::configure_translation(qt_options, "qt_gppgui_en.ts");
+        qt_options.deploy_plugins = {"platforms", "styles", "imageformats"};
+        qt_options.i18n.qt_languages = {"zh_CN"}; // 程序加载的 translations/qt_zh_CN.qm，Updater 共用。
+        gpp::configure_translation(qt_options, "qt_gppgui_en.ts");
         if (!mcpp::rules::qt::compile(qt_options)) return 1;
-        const auto ela_widget_tools = gpp::use_ela_widget_tools(qt_options);
-
-        gpp::release_publisher publisher("GalTranslPP_GUI", vcpkg_directory);
-        publisher.additional_runtime_directories.emplace_back(ela_widget_tools.bin);
-        publisher.publish_release("GPPGUI", translation_file);
+        gpp::use_ela_widget_tools(qt_options);
+        gpp::provide_release_pack("GPPGUI", "GalTranslPP_GUI");
         return 0;
     });
 }
