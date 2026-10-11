@@ -9,10 +9,10 @@ on:
     inputs:
       run:
         description: The probe run whose artifacts are read
-        default: '38148595488'
+        default: '38157130577'
 
 env:
-  PROBE_RUN: ${{ inputs.run || '38148595488' }}
+  PROBE_RUN: ${{ inputs.run || '38157130577' }}
 
 jobs:
   digest:

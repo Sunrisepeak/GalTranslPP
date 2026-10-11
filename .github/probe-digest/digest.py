@@ -171,7 +171,7 @@ def experiment(directory):
 def digest_one(root):
     root = pathlib.Path(root)
     found = {}
-    for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-typing-plain", "e-typing-autosave", "e-warm", "e-bundle"):
+    for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-typing-plain", "e-typing-autosave", "e-warm", "e-bundle", "e-steady", "e-steady-typing"):
         try:
             found[name] = experiment(root / name)
         except Exception as error:   # one unreadable experiment does not lose the others
@@ -223,7 +223,7 @@ def markdown(digests):
     for title, path in rows:
         lines.append(f"| {title} | " + " | ".join(str(get(label, *path)) for label in labels) + " |")
     lines.append("")
-    for section in ("e-diag", "e-typing-plain", "e-typing-autosave"):
+    for section in ("e-diag", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing"):
         lines.append(f"## {section} latency and accuracy")
         lines.append("")
         lines.append("| kind | " + " | ".join(f"{l} p50/p95/max (n, right/checked, empty)" for l in labels) + " |")
