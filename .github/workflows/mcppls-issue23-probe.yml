@@ -45,18 +45,18 @@ jobs:
     name: probe (mcppls ${{ matrix.label }})
     runs-on: windows-2025
     timeout-minutes: 350
-    # 0.0.12 (the release candidate's payload, from the Release run that staged the draft) beside 0.0.11, the last
-    # release, whose engine is stock clangd 23.1: the same project, the same experiments, side by side.
+    # The 0.0.13 candidate (the payload its PR's CI built) beside 0.0.12, the last release: the same project, the same
+    # experiments, side by side. The digest job below reads both and keeps the core of each in small files.
     strategy:
       fail-fast: false
       matrix:
         include:
+          - label: '0.0.13'
+            run: '38173451141'
+            version: '0.0.13'
           - label: '0.0.12'
-            run: '38143421945'
-            version: '0.0.12'
-          - label: '0.0.11'
             run: ''
-            version: '0.0.11'
+            version: '0.0.12'
     env:
       MCPPLS_VERSION: ${{ inputs.mcppls_version || matrix.version }}
       MCPPLS_RUN: ${{ inputs.mcppls_run || matrix.run }}
@@ -219,6 +219,16 @@ jobs:
           python "$LAB" cdb --cdb "$cdb" --out "$OUT/e-cdb"
           python "$PROBE" cdb-stats --cdb "$cdb" --out "$OUT/cdb-diag"
 
+      # E-warm-pure: start again at once on the cache the cold start left, nothing changed in between -- the second
+      # opening of a project. What it costs is in the server's own startup line (the digest keeps it).
+      - name: E-warm-pure (second start, nothing changed)
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          python "$LAB" diag --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag \
+            --root "$(pwd -W)" --out "$OUT/e-warm-pure" --files $DIAG_FILES --max-wait 1800 --quiet 60 --no-preparing-rounds --idle-rounds 5
+
       # The hypothesis of the static analysis: mcppls builds std with the units' -D, which include -D_RANGES_
       # (MSVC <ranges> is `#ifndef _RANGES_`): std would then lack std::views. Tried with the LLVM the project builds with.
       - name: E-hyp (std built with and without -D_RANGES_)
@@ -283,6 +293,20 @@ jobs:
           git checkout -- GalTranslPP
           sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
 
+      # E-buildmcpp: the project's build.mcpp edited with autosave -- a comment, then a call that does not compile, then the
+      # call removed: how often mcpp is asked, whether clangd restarts, what the status says, whether the targets keep
+      # their diagnostics. build.mcpp is put back.
+      - name: E-buildmcpp (editing build.mcpp with autosave)
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          set +e
+          python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/buildmcpp
+          python "$LAB" buildmcpp --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/buildmcpp \
+            --root "$(pwd -W)" --out "$OUT/e-buildmcpp" --max-wait 1200 --settle 40
+          git checkout -- GalTranslPP
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+
       # The bundle a user would attach, from a fresh start on the cache the typing left.
       - name: mcppls report --bundle
         continue-on-error: true
@@ -321,4 +345,43 @@ jobs:
         with:
           name: mcppls-probe-${{ matrix.label }}
           path: D:/probe-out
+          retention-days: 14
+
+  # The two probes' artifacts read where they were made, in seconds, and kept as a few small files: summary.md
+  # (side by side), startups.md (each start's own line, health, module rebuilds by why, what each file's modules
+  # cost), why.md (the log's reasons by kind) and json/<label>/<experiment>.json. The large artifacts are only for
+  # digging further.
+  digest:
+    needs: probe
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/mcppls-probe
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mcppls-probe-*
+          path: probes
+      - name: Digest
+        run: |
+          set -euo pipefail
+          args=()
+          for d in probes/mcppls-probe-*; do args+=("${d#probes/mcppls-probe-}=$d"); done
+          python3 .github/mcppls-probe/digest.py "${args[@]}" --out-dir digest
+          cat digest/summary.md digest/startups.md >> "$GITHUB_STEP_SUMMARY"
+          ls -la digest digest/json/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-digest-summary
+          path: |
+            digest/summary.md
+            digest/startups.md
+            digest/why.md
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-digest-json
+          path: digest/json
           retention-days: 14

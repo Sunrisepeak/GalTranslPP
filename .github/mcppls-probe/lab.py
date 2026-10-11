@@ -58,7 +58,8 @@ class Lab(probe.Lsp):
                 self.status = params
                 engines = [(e.get("name"), e.get("state")) for e in params.get("engines") or []]
                 self.status_history.append({"t": t, "state": params.get("state"), "progress": params.get("progress"), "engines": engines,
-                                            "issues": [i.get("code") for i in params.get("issues") or [] if isinstance(i, dict)]})
+                                            "issues": [i.get("code") for i in params.get("issues") or [] if isinstance(i, dict)],
+                                            "notices": [i.get("code") for i in params.get("notices") or [] if isinstance(i, dict)]})
             elif method == "textDocument/publishDiagnostics":
                 self.diag_times.setdefault(params.get("uri"), []).append({"t": t, "count": len(params.get("diagnostics") or [])})
             elif method == "window/logMessage":
@@ -595,6 +596,94 @@ def typing(args):
 
 # ---------------------------------------------------------------------------------------- warm
 
+# ---------------------------------------------------------------------------------------- build.mcpp
+
+BUILD_MCPP = "GalTranslPP/build.mcpp"
+
+
+def buildmcpp(args):
+    """Edit the project's build.mcpp with autosave after 1 s, as a person does: a comment typed in, then a call that does not
+    compile, then the call removed. Records what mcppls did meanwhile -- how often mcpp was asked to describe the project,
+    whether clangd was restarted, the notices it showed (build-program-held, build-program-failed), and whether the target
+    file kept its diagnostics -- then puts build.mcpp back."""
+    out = pathlib.Path(args.out)
+    root = pathlib.Path(args.root).resolve()
+    lab = start(args, args.cache_dir, out)
+    caps = ((lab.init.get("result") or {}).get("capabilities") or {})
+    sync = caps.get("textDocumentSync")
+    sync_kind = sync.get("change", 2) if isinstance(sync, dict) else (sync if isinstance(sync, int) else 2)
+    opened = {rel: open_file(lab, root, rel) for rel in [BUILD_MCPP, RUN]}
+    path, text, bom = opened[BUILD_MCPP]
+    original = path.read_bytes()
+    started = now()
+    lab.t0 = started
+
+    def wait_ready(limit):
+        end = now() + limit
+        while now() < end and lab.state() not in ("ready", "degraded"):
+            time.sleep(1)
+        return round(now() - started, 1)
+
+    def report():
+        answer = lab.request("cxxModules/report", {}, timeout=120)
+        result = answer.get("result") if answer["status"] == "ok" else None
+        roots = (result or {}).get("roots") or [{}]
+        root_report = roots[0]
+        engines = root_report.get("engines") or []
+        clangd = next((e for e in engines if e.get("name") == "clangd"), {})
+        details = clangd.get("details") or {}
+        events = [e.get("kind") for e in root_report.get("events") or []]
+        return {"producerRuns": sum(1 for r in root_report.get("toolRuns") or [] if r.get("purpose") == "producer"),
+                "restarts": len(details.get("restarts") or []), "events": {k: events.count(k) for k in sorted(set(events))},
+                "about": root_report.get("about"), "startup": root_report.get("startup")}
+
+    ready_at = wait_ready(args.max_wait)
+    before = report()
+    editor = Editor(lab, path, text, bom, True, sync_kind)
+    lines = editor.lines
+    anchor = next(i for i, line in enumerate(lines) if "return 0;" in line)
+    notices = []
+
+    def watch(seconds):
+        end = now() + seconds
+        while now() < end:
+            editor.tick_autosave()
+            codes = [i.get("code") for i in (lab.status or {}).get("notices") or [] if isinstance(i, dict)]
+            notices.append({"t": round(now() - started, 1), "state": lab.state(), "notices": codes})
+            time.sleep(0.5)
+
+    def typ(s):
+        for ch in s:
+            editor.insert(ch)
+            editor.tick_autosave()
+            time.sleep(0.15)
+
+    editor.goto(anchor, 0)
+    typ("        // probe: a comment typed in build.mcpp\n")
+    watch(8)
+    editor.goto(anchor + 1, 0)
+    broken = "        mcpp::no_such_function_from_the_probe();\n"
+    typ(broken)
+    watch(20)
+    editor.delete_line(anchor + 1)
+    editor.save_to_disk()
+    watch(args.settle)
+    after = report()
+    run_uri = probe.uri_of(root / RUN)
+    run_counts = [d["count"] for d in lab.diag_times.get(run_uri, [])]
+    path.write_bytes(original)
+    write_json(out / "status-history.json", lab.status_history)
+    write_json(out / "notices.json", notices)
+    summary = {"kind": "buildmcpp", "readyAt": ready_at, "before": before, "after": after,
+               "describes": after["producerRuns"] - before["producerRuns"], "restarts": after["restarts"] - before["restarts"],
+               "noticesSeen": sorted({c for n in notices for c in n["notices"]}), "statesSeen": sorted({n["state"] for n in notices if n["state"]}),
+               "runDiagnosticCounts": run_counts[-6:], "saves": editor.saves}
+    write_json(out / "summary.json", summary)
+    stop(lab)
+    print(json.dumps(summary, indent=2)[:3000])
+    return 0
+
+
 def robocopy(src, dst):
     if pathlib.Path(dst).exists():
         shutil.rmtree(dst, ignore_errors=True)
@@ -937,6 +1026,11 @@ def main():
     eight.add_argument("--src", required=True)
     eight.add_argument("--dst", required=True)
     eight.set_defaults(run=lambda a: (robocopy(a.src, a.dst), 0)[1])
+    nine = commands.add_parser("buildmcpp")
+    common(nine)
+    nine.add_argument("--max-wait", type=float, default=900)
+    nine.add_argument("--settle", type=float, default=30)
+    nine.set_defaults(run=buildmcpp)
     seven = commands.add_parser("summarize")
     seven.add_argument("--out", required=True)
     seven.set_defaults(run=summarize)
