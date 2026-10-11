@@ -306,13 +306,23 @@ def diag(args):
     last_signature = None
     round_at = 0
     settled_at = None
+    log_path = out / "server-stderr.log"
+    log_seen = 0
+    builds_seen = 0
     while now() - started < args.max_wait and not lab.closed.is_set():
         time.sleep(1)
         t = now() - started
-        signature = (lab.state(), lab.progress(), lab.diagnostic_updates, len(lab.status_history))
+        # --engine-quiet: clangd still building modules or preambles is no quiet, whatever the status says.
+        if args.engine_quiet and log_path.exists():
+            with open(log_path, "rb") as handle:
+                handle.seek(log_seen)
+                chunk = handle.read()
+            log_seen += len(chunk)
+            builds_seen += len(re.findall(rb"Module build task \S+ started|Building first preamble|Rebuilding invalidated preamble|Built prerequisite modules", chunk))
+        signature = (lab.state(), lab.progress(), lab.diagnostic_updates, len(lab.status_history), builds_seen)
         if signature != last_signature:
             last_signature, last_change = signature, now()
-        if t >= round_at and lab.state() in ("preparing", "starting", "loading", None, "degraded", "ready") and settled_at is None:
+        if not args.no_preparing_rounds and t >= round_at and lab.state() in ("preparing", "starting", "loading", None, "degraded", "ready") and settled_at is None:
             probe_round(lab, run_path, run_text, positions, rows, "preparing" if lab.state() in ("preparing", "starting", "loading", None) else lab.state() + "-before-settle", timeout=90)
             round_at = (now() - started) + args.round_gap
         all_diag = all(probe.uri_of(opened[rel][0]) in lab.diagnostics for rel in files)
@@ -890,6 +900,8 @@ def main():
     one.add_argument("--quiet", type=int, default=45)
     one.add_argument("--round-gap", type=int, default=60)
     one.add_argument("--idle-rounds", type=int, default=6)
+    one.add_argument("--engine-quiet", action="store_true", help="quiet also means clangd started no module or preamble build")
+    one.add_argument("--no-preparing-rounds", action="store_true", help="no requests until settled (a steady-state measurement)")
     one.set_defaults(run=diag)
     two = commands.add_parser("typing")
     common(two)

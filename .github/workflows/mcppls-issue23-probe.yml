@@ -268,6 +268,21 @@ jobs:
           python "$LAB" warm --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag --work-dir D:/mcppls-cache \
             --root "$(pwd -W)" --out "$OUT/e-warm" --wait 480 --stall 150 --kill-after 3
 
+      # E-steady: a start on the warm cache that waits until clangd has built nothing for four minutes, then measures
+      # what a person typing on a prepared project gets: completion latency and accuracy at the same points, then typing.
+      - name: E-steady (prepared project; then typing)
+        continue-on-error: true
+        timeout-minutes: 75
+        run: |
+          set +e
+          root="$(pwd -W)"
+          python "$LAB" diag --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag \
+            --root "$root" --out "$OUT/e-steady" --files $DIAG_FILES --max-wait 2400 --quiet 240 --engine-quiet --no-preparing-rounds --idle-rounds 10
+          python "$LAB" typing --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/diag \
+            --root "$root" --out "$OUT/e-steady-typing" --duration 200 --also GalTranslPP/NormalJsonTranslator.TransAgent.cpp
+          git checkout -- GalTranslPP
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+
       # The bundle a user would attach, from a fresh start on the cache the typing left.
       - name: mcppls report --bundle
         continue-on-error: true
