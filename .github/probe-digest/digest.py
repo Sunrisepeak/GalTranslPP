@@ -57,6 +57,37 @@ def diagnostics_digest(diags):
     return out
 
 
+def engine_digest(text):
+    """What clangd itself took: its reply times, its prerequisite and preamble builds, why it was not answered in time."""
+    def seconds_of(pattern, group_file=None):
+        rows = []
+        for match in re.finditer(pattern, text):
+            rows.append(match.groups())
+        return rows
+    replies = collections.defaultdict(list)
+    for method, ms in re.findall(r"--> reply:(textDocument/\w+)\(\d+\) (\d+) ms", text):
+        replies[method].append(int(ms) / 1000)
+    reply_stats = {m: {"n": len(v), "p50": pct(v, 50), "p95": pct(v, 95), "max": round(max(v), 2), "over1s": sum(1 for x in v if x > 1)}
+                   for m, v in replies.items()}
+    prereq = [(pathlib.PureWindowsPath(f).name, float(t)) for f, t in re.findall(r"Built prerequisite modules for file (\S+) in ([0-9.]+) seconds", text)]
+    preamble = [(pathlib.PureWindowsPath(f).name, int(size), float(t)) for size, f, t in
+                re.findall(r"Built preamble of size (\d+) for file (\S+) version \S+ in ([0-9.]+) seconds", text)]
+    late = collections.Counter(re.sub(r"\d+", "N", m) for m in re.findall(r"did not answer (\S+ in time[^\n]*)", text))
+    incompatible = collections.Counter(m[:160] for m in re.findall(r"is not compatible: ([^\n]*)", text))
+    producer = [float(t) for t in re.findall(r"producer \S+ finished in (\d+) ms", text)]
+    states = re.findall(r"\[info\] (module preparation idle[^\n]*|preparation[^\n]{0,120})", text)[-4:]
+    return {
+        "replies": reply_stats,
+        "prerequisiteBuilds": {"n": len(prereq), "p50": pct([t for _, t in prereq], 50), "max": max((t for _, t in prereq), default=None),
+                               "slowest": sorted(prereq, key=lambda r: -r[1])[:6]},
+        "preambles": {"n": len(preamble), "slowest": sorted(preamble, key=lambda r: -r[2])[:6]},
+        "lateReasons": late.most_common(8),
+        "incompatible": incompatible.most_common(8),
+        "producerSeconds": [round(t / 1000, 1) for t in producer][:12],
+        "preparationLines": [s[:200] for s in states],
+    }
+
+
 def experiment(directory):
     d = pathlib.Path(directory)
     result = {"exists": d.exists()}
@@ -98,6 +129,7 @@ def experiment(directory):
             "builtModules": len(re.findall(r"\] Built module ", text)),
             "lastWarnings": [line[:260] for line in re.findall(r".*\[warning\].*", text)[-6:]],
         }
+        result["engine"] = engine_digest(text)
     return result
 
 
