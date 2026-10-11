@@ -76,7 +76,42 @@ def engine_digest(text):
     incompatible = collections.Counter(m[:160] for m in re.findall(r"is not compatible: ([^\n]*)", text))
     producer = [float(t) for t in re.findall(r"producer \S+ finished in (\d+) ms", text)]
     states = re.findall(r"\[info\] (module preparation idle[^\n]*|preparation[^\n]{0,120})", text)[-4:]
+    # When things happened, from the start of the log: module builds (one per name), the prerequisite sets, the first
+    # completion clangd answered within a second.
+    stamp = re.compile(r"^mcppls (\d{4}-\d\d-\d\dT(\d\d):(\d\d):(\d\d\.\d+))Z", re.M)
+    def at(line_start):
+        m = stamp.match(text, line_start)
+        return int(m.group(2)) * 3600 + int(m.group(3)) * 60 + float(m.group(4)) if m else None
+    starts = [m.start() for m in re.finditer(r"^mcppls ", text, re.M)]
+    t0 = at(starts[0]) if starts else 0
+    def line_at(pos):
+        i = text.rfind("\n", 0, pos) + 1
+        t = at(i)
+        return round(t - t0, 1) if t is not None and t0 is not None else None
+    started, built = {}, []
+    for m in re.finditer(r"Module build task (\S+) started", text):
+        started.setdefault(m.group(1), line_at(m.start()))
+    for m in re.finditer(r"\] Built module (\S+) to", text):
+        built.append((m.group(1), started.get(m.group(1)), line_at(m.start())))
+    first_fast = None
+    for m in re.finditer(r"--> reply:textDocument/completion\(\d+\) (\d+) ms", text):
+        if int(m.group(1)) < 1000:
+            first_fast = line_at(m.start())
+            break
+    workers = re.findall(r"Module build task \S+ started \(active=\d+, limit=(\d+)\)", text)
+    timeline = {
+        "logSeconds": line_at(len(text) - 1),
+        "modulesBuilt": len(built),
+        "firstModuleBuiltAt": built[0][2] if built else None, "lastModuleBuiltAt": built[-1][2] if built else None,
+        "slowestModules": sorted(((n, round(e - b, 1) if b is not None and e is not None else None) for n, b, e in built),
+                                 key=lambda r: -(r[1] or 0))[:8],
+        "buildLimit": collections.Counter(workers).most_common(2),
+        "firstCompletionUnder1sAt": first_fast,
+        "prerequisiteSetsAt": [(pathlib.PureWindowsPath(m.group(1)).name, float(m.group(2)), line_at(m.start()))
+                               for m in re.finditer(r"Built prerequisite modules for file (\S+) in ([0-9.]+) seconds", text)][:12],
+    }
     return {
+        "timeline": timeline,
         "replies": reply_stats,
         "prerequisiteBuilds": {"n": len(prereq), "p50": pct([t for _, t in prereq], 50), "max": max((t for _, t in prereq), default=None),
                                "slowest": sorted(prereq, key=lambda r: -r[1])[:6]},
