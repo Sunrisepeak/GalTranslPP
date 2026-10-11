@@ -9,10 +9,10 @@ on:
     inputs:
       run:
         description: The probe run whose artifacts are read
-        default: '38157130577'
+        default: '38174496077'
 
 env:
-  PROBE_RUN: ${{ inputs.run || '38157130577' }}
+  PROBE_RUN: ${{ inputs.run || '38174496077' }}
 
 jobs:
   digest:
@@ -27,26 +27,21 @@ jobs:
           sparse-checkout: .github/probe-digest
       - uses: actions/download-artifact@v4
         with:
-          name: mcppls-probe-0.0.12
-          path: probe-0.0.12
-          run-id: ${{ env.PROBE_RUN }}
-          github-token: ${{ github.token }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: mcppls-probe-0.0.11
-          path: probe-0.0.11
+          pattern: mcppls-probe-*
+          path: probes
           run-id: ${{ env.PROBE_RUN }}
           github-token: ${{ github.token }}
       - name: What the artifacts hold
         run: |
-          for d in probe-0.0.12 probe-0.0.11; do
+          for d in probes/*; do
             echo "== $d"; du -sh "$d"
             find "$d" -maxdepth 2 -type f -printf '%s %p\n' | sort -k2 | head -150
           done
       - name: Digest
         run: |
           mkdir -p digest
-          python3 .github/probe-digest/digest.py 0.0.12=probe-0.0.12 0.0.11=probe-0.0.11 --out digest/digest.json --markdown digest/digest.md
+          args=(); for d in probes/mcppls-probe-*; do args+=("${d#probes/mcppls-probe-}=$d"); done
+          python3 .github/probe-digest/digest.py "${args[@]}" --out digest/digest.json --markdown digest/digest.md --out-dir digest/split
           cat digest/digest.md >> "$GITHUB_STEP_SUMMARY"
           cat digest/digest.md
           ls -la digest

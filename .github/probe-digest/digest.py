@@ -41,6 +41,8 @@ def latency_digest(rows):
             "notOk": collections.Counter(r.get("status") for r in items if r.get("status") != "ok"),
             "empty": sum(1 for r in items if r.get("count") == 0),
             "checked": len(checked), "right": sum(1 for r in checked if r["hit"]), "misses": misses,
+            # Rows that came back without a result (neither a list nor items): what they were, whole.
+            "noResult": [r for r in items if r.get("count") is None][:3],
         }
     return out
 
@@ -196,6 +198,39 @@ def report_digest(report):
     return out
 
 
+def server_lines_digest(text):
+    """The lines mcppls 0.0.13 writes for exactly this (docs/50-troubleshooting.md, "What the log says"): what each start
+    cost, the health summaries, the versions, why each module was rebuilt and what each file's modules cost."""
+    out = {"versions": [], "startup": [], "health": [], "rebuildsByWhy": collections.Counter(), "rebuildSamples": [],
+           "prerequisites": [], "timersSlow": []}
+    for line in text.splitlines():
+        if "[info] versions (" in line:
+            out["versions"].append(line.split("[info] ", 1)[1][:300])
+        elif "[info] startup (" in line:
+            out["startup"].append(line.split("[info] ", 1)[1][:600])
+        elif "[info] health (" in line:
+            out["health"].append(line.split("[info] ", 1)[1][:600])
+        elif "the timers of " in line:
+            out["timersSlow"].append(line[-300:])
+        elif "Rebuilding module " in line:
+            why = line.split("Rebuilding module ", 1)[1]
+            module, _, reason = why.partition(": ")
+            category = ("no-bmi" if reason.startswith("no BMI was built") else "command" if " built with other " in reason
+                        else "no-bmi" if reason.startswith("no BMI for this command") else "input" if "modified" in reason or "changed" in reason
+                        else "invalid" if "valid" in reason else "other")
+            out["rebuildsByWhy"][category] += 1
+            if len(out["rebuildSamples"]) < 12:
+                out["rebuildSamples"].append(f"{module}: {reason[:200]}")
+        elif "Prerequisites of " in line:
+            m = re.search(r"Prerequisites of (.*?): (\d+) modules, (\d+) reused, (\d+) built, (\d+) failed, in ([\d.]+) s \(reuse checks ([\d.]+) s, builds ([\d.]+) s", line)
+            if m:
+                out["prerequisites"].append({"file": m.group(1).replace("\\", "/").rsplit("/", 1)[-1], "modules": int(m.group(2)), "reused": int(m.group(3)),
+                                             "built": int(m.group(4)), "failed": int(m.group(5)), "seconds": float(m.group(6)),
+                                             "reuseSeconds": float(m.group(7)), "buildSeconds": float(m.group(8))})
+    out["prerequisites"] = sorted(out["prerequisites"], key=lambda r: -r["seconds"])[:15]
+    return out
+
+
 def experiment(directory):
     d = pathlib.Path(directory)
     result = {"exists": d.exists()}
@@ -233,6 +268,7 @@ def experiment(directory):
         result["logFiles"] = [p.name for p in logs]
         text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in logs)
         result["why"] = why_digest(text)
+        result["server"] = server_lines_digest(text)
         result["log"] = {
             "warnings": len(re.findall(r"\[warning\]", text)), "errors": len(re.findall(r"\[error\]", text)),
             "clangdRestarts": len(re.findall(r"restarting clangd", text)),
@@ -249,7 +285,8 @@ def experiment(directory):
 def digest_one(root):
     root = pathlib.Path(root)
     found = {}
-    for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-typing-plain", "e-typing-autosave", "e-warm", "e-bundle", "e-steady", "e-steady-typing"):
+    for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-warm-pure", "e-typing-plain", "e-typing-autosave", "e-warm",
+                 "e-bundle", "e-steady", "e-steady-typing", "e-buildmcpp"):
         try:
             found[name] = experiment(root / name)
         except Exception as error:   # one unreadable experiment does not lose the others
@@ -276,7 +313,7 @@ def digest_one(root):
 
 
 def markdown(digests):
-    lines = ["# mcppls on GalTranslPP (Windows): 0.0.12 vs 0.0.11", ""]
+    lines = [f"# mcppls on the Windows probe project: {' vs '.join(digests)}", ""]
     labels = list(digests)
     def get(label, *path):
         node = digests[label]
@@ -296,12 +333,16 @@ def markdown(digests):
         ("typing autosave: failed requests", ("e-typing-autosave", "summary", "failedRequests")),
         ("typing plain: clangd restarts (log)", ("e-typing-plain", "log", "clangdRestarts")),
         ("typing autosave: clangd restarts (log)", ("e-typing-autosave", "log", "clangdRestarts")),
+        ("warm, nothing changed: settled after (s)", ("e-warm-pure", "settle", "settledAfter")),
+        ("build.mcpp edits: describes", ("e-buildmcpp", "summary", "describes")),
+        ("build.mcpp edits: clangd restarts", ("e-buildmcpp", "summary", "restarts")),
+        ("build.mcpp edits: notices seen", ("e-buildmcpp", "summary", "noticesSeen")),
         ("dumps", ("dumps",)),
     ]
     for title, path in rows:
         lines.append(f"| {title} | " + " | ".join(str(get(label, *path)) for label in labels) + " |")
     lines.append("")
-    for section in ("e-diag", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing"):
+    for section in ("e-diag", "e-warm-pure", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing"):
         lines.append(f"## {section} latency and accuracy")
         lines.append("")
         lines.append("| kind | " + " | ".join(f"{l} p50/p95/max (n, right/checked, empty)" for l in labels) + " |")
@@ -324,7 +365,7 @@ def markdown(digests):
     lines.append("")
     lines.append("## why (log reasons: count, distinct kinds, first samples)")
     for l in labels:
-        sections = [(name, digests[l].get(name)) for name in ("e-diag", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing")]
+        sections = [(name, digests[l].get(name)) for name in ("e-diag", "e-warm-pure", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing", "e-buildmcpp")]
         sections += [(f"e-warm/{k}", v) for k, v in (digests[l].get("e-warm-parts") or {}).items()]
         for name, node in sections:
             why = (node or {}).get("why") if isinstance(node, dict) else None
@@ -341,18 +382,64 @@ def markdown(digests):
     return "\n".join(lines) + "\n"
 
 
+def startup_markdown(digests):
+    """What each start cost, by the server's own lines: one section per version, one line per start."""
+    lines = ["# Starts, health and module rebuilds", ""]
+    for label, digest in digests.items():
+        lines.append(f"## {label}")
+        for name, node in digest.items():
+            server = node.get("server") if isinstance(node, dict) else None
+            parts = [(name, node)] if server else []
+            if name == "e-warm-parts" and isinstance(node, dict):
+                parts = [(f"e-warm/{k}", v) for k, v in node.items() if isinstance(v, dict) and v.get("server")]
+            for part, value in parts:
+                sv = value["server"]
+                if not (sv["startup"] or sv["health"] or sv["rebuildsByWhy"] or sv["prerequisites"]):
+                    continue
+                lines.append(f"### {part}")
+                for entry in sv["versions"][:1] + sv["startup"] + sv["health"][-2:]:
+                    lines.append(f"- `{entry}`")
+                if sv["rebuildsByWhy"]:
+                    lines.append(f"- rebuilds by why: {dict(sv['rebuildsByWhy'])}")
+                    for sample in sv["rebuildSamples"][:6]:
+                        lines.append(f"  - `{sample}`")
+                if sv["prerequisites"]:
+                    lines.append("")
+                    lines.append("| file | modules | reused | built | failed | s | reuse s | build s |")
+                    lines.append("|---|---|---|---|---|---|---|---|")
+                    for r in sv["prerequisites"][:8]:
+                        lines.append(f"| {r['file']} | {r['modules']} | {r['reused']} | {r['built']} | {r['failed']} | {r['seconds']} | {r['reuseSeconds']} | {r['buildSeconds']} |")
+                lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("inputs", nargs="+")
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--markdown", required=True)
+    parser.add_argument("--out", help="the whole digest as one JSON file")
+    parser.add_argument("--markdown", help="the overview, as markdown")
+    parser.add_argument("--out-dir", help="split: summary.md, startups.md, why.md and json/<label>/<experiment>.json")
     args = parser.parse_args()
     digests = {}
     for item in args.inputs:
         label, directory = item.split("=", 1)
         digests[label] = digest_one(directory)
-    pathlib.Path(args.out).write_text(json.dumps(digests, indent=1, default=str), encoding="utf-8")
-    pathlib.Path(args.markdown).write_text(markdown(digests), encoding="utf-8")
+    overview = markdown(digests)
+    if args.out:
+        pathlib.Path(args.out).write_text(json.dumps(digests, indent=1, default=str), encoding="utf-8")
+    if args.markdown:
+        pathlib.Path(args.markdown).write_text(overview, encoding="utf-8")
+    if args.out_dir:
+        out = pathlib.Path(args.out_dir)
+        (out / "json").mkdir(parents=True, exist_ok=True)
+        head, _, why = overview.partition("## why")
+        (out / "summary.md").write_text(head, encoding="utf-8")
+        (out / "why.md").write_text("## why" + why if why else "no reasons recorded\n", encoding="utf-8")
+        (out / "startups.md").write_text(startup_markdown(digests), encoding="utf-8")
+        for label, digest in digests.items():
+            (out / "json" / label).mkdir(parents=True, exist_ok=True)
+            for name, node in digest.items():
+                (out / "json" / label / f"{name}.json").write_text(json.dumps(node, indent=1, default=str), encoding="utf-8")
 
 
 if __name__ == "__main__":
