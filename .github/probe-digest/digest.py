@@ -130,7 +130,7 @@ def engine_digest(text):
 WHY = {
     "restart": [("restarting clangd",)],
     "databaseChanged": [("engine database changed",)],
-    "scanFailed": [("scan", "fail")],
+    "scanFailed": [("dependencies for", "failed")],
     "moduleFailed": [("Failed to build module",), ("could not build module",), ("did not compile",)],
     "producerPartial": [("described the project in part",)],
     "producer": [("mcpp emit build-database",), ("still running after",)],
@@ -268,6 +268,12 @@ def experiment(directory):
         result["logFiles"] = [p.name for p in logs]
         text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in logs)
         result["why"] = why_digest(text)
+        # The lines before the first file set aside or engine restart for recovery: what clangd was doing then.
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if "stopped answering" in line or "would not finish" in line or "set aside" in line:
+                result["incidentContext"] = [l[:400] for l in lines[max(0, index - 150):index + 10] if "<<< " not in l and ">>> " not in l][-120:]
+                break
         result["server"] = server_lines_digest(text)
         result["log"] = {
             "warnings": len(re.findall(r"\[warning\]", text)), "errors": len(re.findall(r"\[error\]", text)),
