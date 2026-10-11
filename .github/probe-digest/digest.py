@@ -123,6 +123,72 @@ def engine_digest(text):
     }
 
 
+WHY = {
+    "restart": r"restarting clangd[^\n]*",
+    "databaseChanged": r"engine database changed[^\n]*",
+    "scanFailed": r"[^\n]*(?:scan[^\n]*fail|fail[^\n]*scan)[^\n]*",
+    "moduleFailed": r"[^\n]*(?:Failed to build module|could not build module|did not compile)[^\n]*",
+    "producerPartial": r"mcpp described the project in part[^\n]*",
+    "producer": r"[^\n]*mcpp emit build-database[^\n]*",
+    "stale": r"[^\n]*\bstale\b[^\n]*",
+    "stall": r"[^\n]*the event loop took[^\n]*",
+    "setAside": r"[^\n]*(?:set aside|did not build in clangd|routed to mcppls|handing [^\n]* back)[^\n]*",
+    "preamble": r"[^\n]*(?:not compatible:|Rebuilding invalidated preamble|preamble [^\n]*stale)[^\n]*",
+    "moduleCache": r"[^\n]*(?:out of date|is newer than|rebuil[dt][^\n]*module|module[^\n]*(?:miss|invalid))[^\n]*",
+}
+
+
+def normalized(line):
+    line = re.sub(r"^\S+ \S+ \[\w+\] ", "", line)            # mcppls <time> [level]
+    line = re.sub(r"[IEVW]\[\d\d:\d\d:\d\d\.\d+\] ", "", line)   # clangd's own stamp
+    return re.sub(r"\d+(?:\.\d+)?", "N", line)
+
+
+def why_digest(text):
+    out = {}
+    for key, pattern in WHY.items():
+        lines = re.findall(pattern, text)
+        seen, samples = set(), []
+        for line in lines:
+            n = normalized(line)[:200]
+            if n in seen:
+                continue
+            seen.add(n)
+            samples.append(line[:320])
+        out[key] = {"n": len(lines), "kinds": len(seen), "samples": samples[:8]}
+    return out
+
+
+REPORT_KINDS = ("engine-restart", "engine-restart-scheduled", "engine-plan-diff", "model-source", "model-loaded", "incident",
+                "file-set-aside", "file-doomed", "engine-spin", "engine-exit", "producer-slow", "tool-run", "engine-database", "plan")
+
+
+def report_digest(report):
+    if not isinstance(report, dict):
+        return None
+    roots = report.get("roots") or []
+    out = {"server": {k: report.get("server", {}).get(k) for k in ("version", "uptimeSeconds")}, "roots": []}
+    for root in roots:
+        project = root.get("project", {})
+        events = root.get("events", [])
+        picked = []
+        for e in events:
+            if e.get("kind") in REPORT_KINDS:
+                detail = e.get("detail", {})
+                if e.get("kind") == "tool-run":
+                    detail = {k: detail.get(k) for k in ("arguments", "durationMs", "exitCode", "purpose")} | {"stderrTail": str(detail.get("stderrTail", ""))[-400:]}
+                picked.append({"at": e.get("at"), "kind": e.get("kind"), "detail": json.dumps(detail)[:700]})
+        out["roots"].append({
+            "project": {k: project.get(k) for k in ("origin", "firstOrigin", "staleReason", "producerVersion", "level", "sets", "issues", "notices")},
+            "eventTotals": root.get("eventTotals"),
+            "events": picked[-60:],
+            "engines": [{k: e.get(k) for k in ("name", "state", "version", "prepared", "toPrepare")} | {
+                "restarts": (e.get("details") or {}).get("restarts"), "lastPlanDiff": json.dumps((e.get("details") or {}).get("lastPlanDiff"))[:1500],
+                "buildTimes": (e.get("details") or {}).get("buildTimes", [])[:12]} for e in root.get("engines", [])],
+        })
+    return out
+
+
 def experiment(directory):
     d = pathlib.Path(directory)
     result = {"exists": d.exists()}
@@ -149,12 +215,17 @@ def experiment(directory):
             return len(value) if isinstance(value, (list, dict)) else (value or 0) if isinstance(value, (int, float)) else 0
         for key, name in (("restarts", "engineRestartsMax"), ("recentExits", "engineExitsMax"), ("filesSetAside", "filesSetAsideMax")):
             result[name] = max((number(e.get(key)) for e in engines), default=None)
+    for name in ("report.json",):
+        if (d / name).exists():
+            result["report"] = report_digest(load(d / name))
     poll = load(d / "poll.json")
     if isinstance(poll, list) and poll:
         result["serverAliveAtEnd"] = poll[-1].get("alive")
-    stderr = d / "server-stderr.log"
-    if stderr.exists():
-        text = stderr.read_text(encoding="utf-8", errors="replace")
+    logs = sorted(d.glob("*-stderr.log"))   # server-stderr.log, or one per start in e-warm (<step>-stderr.log)
+    if logs:
+        result["logFiles"] = [p.name for p in logs]
+        text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in logs)
+        result["why"] = why_digest(text)
         result["log"] = {
             "warnings": len(re.findall(r"\[warning\]", text)), "errors": len(re.findall(r"\[error\]", text)),
             "clangdRestarts": len(re.findall(r"restarting clangd", text)),
@@ -243,6 +314,23 @@ def markdown(digests):
     lines.append("|---|" + "---|" * len(labels))
     for f in files:
         lines.append(f"| {f} | " + " | ".join(str(((get(l, "e-diag", "diagnostics") or {}).get(f) or {}).get("errors")) for l in labels) + " |")
+    lines.append("")
+    lines.append("## why (log reasons: count, distinct kinds, first samples)")
+    for l in labels:
+        sections = [(name, digests[l].get(name)) for name in ("e-diag", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing")]
+        sections += [(f"e-warm/{k}", v) for k, v in (digests[l].get("e-warm-parts") or {}).items()]
+        for name, node in sections:
+            why = (node or {}).get("why") if isinstance(node, dict) else None
+            if not why or not any(w["n"] for w in why.values()):
+                continue
+            lines.append("")
+            lines.append(f"### {l} {name}")
+            for key, w in why.items():
+                if not w["n"]:
+                    continue
+                lines.append(f"- **{key}** {w['n']} ({w['kinds']} kinds)")
+                for sample in w["samples"][:3]:
+                    lines.append(f"  - `{sample[:240].replace('`', chr(39))}`")
     return "\n".join(lines) + "\n"
 
 
