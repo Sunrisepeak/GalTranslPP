@@ -79,9 +79,10 @@ def experiment(directory):
     reports = load(d / "reports.json")
     if isinstance(reports, list) and reports:
         engines = [e for r in reports for e in r.get("engines", [])]
-        result["engineRestartsMax"] = max((e.get("restarts") or 0) for e in engines) if engines else None
-        result["engineExitsMax"] = max((e.get("recentExits") or 0) for e in engines) if engines else None
-        result["filesSetAsideMax"] = max((e.get("filesSetAside") or 0) for e in engines) if engines else None
+        def number(value):
+            return len(value) if isinstance(value, (list, dict)) else (value or 0) if isinstance(value, (int, float)) else 0
+        for key, name in (("restarts", "engineRestartsMax"), ("recentExits", "engineExitsMax"), ("filesSetAside", "filesSetAsideMax")):
+            result[name] = max((number(e.get(key)) for e in engines), default=None)
     poll = load(d / "poll.json")
     if isinstance(poll, list) and poll:
         result["serverAliveAtEnd"] = poll[-1].get("alive")
@@ -104,11 +105,21 @@ def digest_one(root):
     root = pathlib.Path(root)
     found = {}
     for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-typing-plain", "e-typing-autosave", "e-warm", "e-bundle"):
-        found[name] = experiment(root / name)
+        try:
+            found[name] = experiment(root / name)
+        except Exception as error:   # one unreadable experiment does not lose the others
+            found[name] = {"error": repr(error)}
     # e-warm writes one directory per start
     warm = root / "e-warm"
     if warm.exists():
-        found["e-warm-parts"] = {p.name: experiment(p) for p in sorted(warm.iterdir()) if p.is_dir()}
+        parts = {}
+        for p in sorted(warm.iterdir()):
+            if p.is_dir():
+                try:
+                    parts[p.name] = experiment(p)
+                except Exception as error:
+                    parts[p.name] = {"error": repr(error)}
+        found["e-warm-parts"] = parts
     dumps = root / "dumps"
     found["dumps"] = sorted(p.name for p in dumps.iterdir()) if dumps.exists() else []
     events = root / "application-events.txt"
