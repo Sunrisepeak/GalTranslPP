@@ -1,0 +1,57 @@
+# Temporary, not meant to be merged: reads the two artifacts of the mcppls probe run (0.0.12 beside 0.0.11) inside
+# GitHub, where they download in seconds, and keeps only their core in a digest of a few kilobytes.
+name: mcppls probe digest
+
+on:
+  push:
+    branches: [ci/probe-digest]
+  workflow_dispatch:
+    inputs:
+      run:
+        description: The probe run whose artifacts are read
+        default: '38148595488'
+
+env:
+  PROBE_RUN: ${{ inputs.run || '38148595488' }}
+
+jobs:
+  digest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/probe-digest
+      - uses: actions/download-artifact@v4
+        with:
+          name: mcppls-probe-0.0.12
+          path: probe-0.0.12
+          run-id: ${{ env.PROBE_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: mcppls-probe-0.0.11
+          path: probe-0.0.11
+          run-id: ${{ env.PROBE_RUN }}
+          github-token: ${{ github.token }}
+      - name: What the artifacts hold
+        run: |
+          for d in probe-0.0.12 probe-0.0.11; do
+            echo "== $d"; du -sh "$d"
+            find "$d" -maxdepth 2 -type f -printf '%s %p\n' | sort -k2 | head -150
+          done
+      - name: Digest
+        run: |
+          mkdir -p digest
+          python3 .github/probe-digest/digest.py 0.0.12=probe-0.0.12 0.0.11=probe-0.0.11 --out digest/digest.json --markdown digest/digest.md
+          cat digest/digest.md >> "$GITHUB_STEP_SUMMARY"
+          cat digest/digest.md
+          ls -la digest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-digest
+          path: digest
+          retention-days: 7
