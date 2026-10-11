@@ -123,20 +123,21 @@ def engine_digest(text):
     }
 
 
+# Each reason is a line holding all the words of one of its alternatives (substring tests, line by line: a regex
+# that starts with [^\n]* backtracks quadratically on clangd's multi-kilobyte command lines).
 WHY = {
-    "restart": r"restarting clangd[^\n]*",
-    "databaseChanged": r"engine database changed[^\n]*",
-    "scanFailed": r"[^\n]*(?:scan[^\n]*fail|fail[^\n]*scan)[^\n]*",
-    "moduleFailed": r"[^\n]*(?:Failed to build module|could not build module|did not compile)[^\n]*",
-    "producerPartial": r"mcpp described the project in part[^\n]*",
-    "producer": r"[^\n]*mcpp emit build-database[^\n]*",
-    "stale": r"[^\n]*\bstale\b[^\n]*",
-    "stall": r"[^\n]*the event loop took[^\n]*",
-    "setAside": r"[^\n]*(?:set aside|did not build in clangd|routed to mcppls|handing [^\n]* back)[^\n]*",
-    "preamble": r"[^\n]*(?:not compatible:|Rebuilding invalidated preamble|preamble [^\n]*stale)[^\n]*",
-    "moduleCache": r"[^\n]*(?:out of date|is newer than|rebuil[dt][^\n]*module|module[^\n]*(?:miss|invalid))[^\n]*",
+    "restart": [("restarting clangd",)],
+    "databaseChanged": [("engine database changed",)],
+    "scanFailed": [("scan", "fail")],
+    "moduleFailed": [("Failed to build module",), ("could not build module",), ("did not compile",)],
+    "producerPartial": [("described the project in part",)],
+    "producer": [("mcpp emit build-database",), ("still running after",)],
+    "stale": [("stale",), ("older than its inputs",)],
+    "stall": [("the event loop took",)],
+    "setAside": [("set aside",), ("did not build in clangd",), ("routed to mcppls",), ("back to clangd",)],
+    "preamble": [("not compatible:",), ("Rebuilding invalidated preamble",)],
+    "moduleCache": [("out of date",), ("is newer than",), ("rebuild", "module")],
 }
-
 
 def normalized(line):
     line = re.sub(r"^\S+ \S+ \[\w+\] ", "", line)            # mcppls <time> [level]
@@ -145,12 +146,18 @@ def normalized(line):
 
 
 def why_digest(text):
+    found = {key: [] for key in WHY}
+    for line in text.splitlines():
+        if len(line) > 4000:
+            line = line[:4000]
+        for key, alternatives in WHY.items():
+            if any(all(word in line for word in words) for words in alternatives):
+                found[key].append(line)
     out = {}
-    for key, pattern in WHY.items():
-        lines = re.findall(pattern, text)
+    for key, lines in found.items():
         seen, samples = set(), []
         for line in lines:
-            n = normalized(line)[:200]
+            n = normalized(line[:400])[:200]
             if n in seen:
                 continue
             seen.add(n)
@@ -233,7 +240,7 @@ def experiment(directory):
             "eventLoopStalls": len(re.findall(r"the event loop took", text)),
             "preambleIncompatible": len(re.findall(r"is not compatible:", text)),
             "builtModules": len(re.findall(r"\] Built module ", text)),
-            "lastWarnings": [line[:260] for line in re.findall(r".*\[warning\].*", text)[-6:]],
+            "lastWarnings": [line[:260] for line in text.splitlines() if "[warning]" in line][-6:],
         }
         result["engine"] = engine_digest(text)
     return result
