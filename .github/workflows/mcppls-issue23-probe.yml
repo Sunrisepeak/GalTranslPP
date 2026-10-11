@@ -15,7 +15,7 @@ on:
     inputs:
       mcppls_version:
         description: The mcpp-language-server release whose win32-x64 payload is probed (when no run is given)
-        default: '0.0.6'
+        default: ''
       mcppls_run:
         description: A CI run of Sunrisepeak/mcpp-language-server whose payload-win32-x64 artifact is probed instead
         default: ''
@@ -25,10 +25,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MCPPLS_VERSION: ${{ inputs.mcppls_version || '0.0.6' }}
-  # Cross-validation of mcpp-language-server PR #33 (0.0.7): its CI run's payload, with every default of 0.0.7
-  # (no --producer-timeout: the producer's deadline follows the project now).
-  MCPPLS_RUN: ${{ inputs.mcppls_run || '36773996351' }}
   LLVM_VERSION: 22.1.8        # mcpp.toml [toolchain] windows
   XLINGS_NON_INTERACTIVE: '1'
   PYTHONUTF8: '1'
@@ -46,8 +42,24 @@ env:
 
 jobs:
   probe:
+    name: probe (mcppls ${{ matrix.label }})
     runs-on: windows-2025
     timeout-minutes: 350
+    # 0.0.12 (the release candidate's payload, from the Release run that staged the draft) beside 0.0.11, the last
+    # release, whose engine is stock clangd 23.1: the same project, the same experiments, side by side.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: '0.0.12'
+            run: '38143421945'
+            version: '0.0.12'
+          - label: '0.0.11'
+            run: ''
+            version: '0.0.11'
+    env:
+      MCPPLS_VERSION: ${{ inputs.mcppls_version || matrix.version }}
+      MCPPLS_RUN: ${{ inputs.mcppls_run || matrix.run }}
     defaults:
       run:
         shell: bash
@@ -292,6 +304,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mcppls-issue23-probe
+          name: mcppls-probe-${{ matrix.label }}
           path: D:/probe-out
           retention-days: 14

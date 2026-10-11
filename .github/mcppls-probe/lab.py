@@ -141,9 +141,12 @@ def stats(rows):
     for kind in sorted({row["kind"] for row in rows}):
         of_kind = [row for row in rows if row["kind"] == kind]
         seconds = [row["seconds"] for row in of_kind if row["status"] == "ok"]
+        checked = [row for row in of_kind if "hit" in row]
         result[kind] = {"n": len(of_kind), "ok": len(seconds), "failed": len(of_kind) - len(seconds),
                         "p50": pct(seconds, 50), "p95": pct(seconds, 95), "max": max(seconds) if seconds else None,
-                        "statuses": {s: sum(1 for row in of_kind if row["status"] == s) for s in sorted({row["status"] for row in of_kind})}}
+                        "statuses": {s: sum(1 for row in of_kind if row["status"] == s) for s in sorted({row["status"] for row in of_kind})},
+                        "checked": len(checked), "right": sum(1 for row in checked if row["hit"]),
+                        "empty": sum(1 for row in of_kind if row.get("count") == 0)}
     return result
 
 
@@ -167,7 +170,40 @@ def points(text):
     return found
 
 
-def timed(lab, kind, method, params, timeout, rows, phase, extra=None):
+def completion_names(result):
+    """The names a completion offers, as a person reads them: `push_back(…)`, `• views` and `views::` are all `push_back`, `views`."""
+    items = result.get("items") if isinstance(result, dict) else result if isinstance(result, list) else None
+    names = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("filterText") or item.get("label") or "").strip().lstrip("•").strip()
+        name = re.split(r"[(<\s:]", name, maxsplit=1)[0]
+        if name:
+            names.append(name)
+    return names
+
+
+# What a right answer offers at each kind of position; one of the names is enough.
+EXPECT = [
+    (r"std::$", ["views", "ranges", "vector", "string"]),
+    (r"views::$", ["keys", "transform", "iota", "filter"]),
+    (r"\b(relFilePaths)\.$", ["push_back", "size", "empty", "begin"]),
+    (r"\b(savedTranslCacheMap)\.$", ["find", "contains", "size", "at"]),
+    (r"\b(overview|fileOverview|newItem|j)\.$", ["push_back", "dump", "contains", "get_ref", "is_array"]),
+    (r"^import $", ["Tool", "NormalJsonTranslator", "GPPDefines", "ITranslator"]),
+    (r"^import NormalJson$", ["NormalJsonTranslator", "NormalJsonTranslatorHelperTool"]),
+]
+
+
+def expected_at(prefix):
+    for pattern, names in EXPECT:
+        if re.search(pattern, prefix):
+            return names
+    return None
+
+
+def timed(lab, kind, method, params, timeout, rows, phase, extra=None, expect=None):
     started = now()
     answer = lab.request(method, params, timeout=timeout)
     result = answer.get("result")
@@ -180,6 +216,13 @@ def timed(lab, kind, method, params, timeout, rows, phase, extra=None):
         count = len(result["data"])
     row = {"t": round(started - lab.t0, 2), "phase": phase, "kind": kind, "status": answer["status"], "seconds": answer["seconds"],
            "count": count, "state": lab.state(), "progress": lab.progress()}
+    if method == "textDocument/completion" and answer["status"] == "ok":
+        names = completion_names(result)
+        row["top"] = names[:12]
+        row["incomplete"] = bool(isinstance(result, dict) and result.get("isIncomplete"))
+        if expect:
+            row["expect"] = expect
+            row["hit"] = any(name in names for name in expect)
     if answer["status"] == "error":
         row["error"] = str(answer.get("error"))[:300]
     if extra:
@@ -194,7 +237,8 @@ def probe_round(lab, path, text, positions, rows, phase, timeout=60):
         if kind in positions:
             line, character = positions[kind]
             timed(lab, f"completion:{kind}", "textDocument/completion",
-                  {"textDocument": doc, "position": {"line": line, "character": character}, "context": {"triggerKind": 1}}, timeout, rows, phase)
+                  {"textDocument": doc, "position": {"line": line, "character": character}, "context": {"triggerKind": 1}}, timeout, rows, phase,
+                  expect=expected_at(line_of(text, line)[:character]))
     if "hover_views" in positions:
         line, character = positions["hover_views"]
         timed(lab, "hover", "textDocument/hover", {"textDocument": doc, "position": {"line": line, "character": character}}, timeout, rows, phase)
@@ -425,10 +469,11 @@ def typing(args):
 
     def complete(kind):
         line, col = editor.line, editor.col
+        prefix = editor.lines[line][:col]
         def work():
             timed(lab, f"completion:{kind}", "textDocument/completion",
                   {"textDocument": {"uri": editor.uri}, "position": {"line": line, "character": col}, "context": {"triggerKind": 1}}, args.request_timeout, rows, "typing",
-                  {"version": editor.version, "line": line + 1, "col": col})
+                  {"version": editor.version, "line": line + 1, "col": col, "prefix": prefix[-40:]}, expect=expected_at(prefix))
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
         workers.append(thread)
