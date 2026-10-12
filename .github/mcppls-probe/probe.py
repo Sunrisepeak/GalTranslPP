@@ -291,8 +291,8 @@ def session(args):
     lsp.notify("initialized", {})
     texts = {}
     for path in files:
-        # VS Code hands the text without the byte order mark.
-        texts[path] = path.read_text(encoding="utf-8-sig", errors="replace")
+        # VS Code hands the text without the byte order mark, and with the file's own line endings.
+        texts[path] = path.read_bytes().decode("utf-8-sig", errors="replace")
         lsp.notify("textDocument/didOpen", {"textDocument": {"uri": uri_of(path), "languageId": "cpp", "version": 1, "text": texts[path]}})
     timeline = []
     definitions = []   # plan 2026-09-27 V-W: where go-to-definition lands, round by round

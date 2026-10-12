@@ -226,7 +226,10 @@ def server_lines_digest(text):
             out["warm"]["adopted"] += 1
             out["warmReadyMs"].append(int(m.group(1)))
             continue
-        if "which has other text; clangd takes it as a change" in line:
+        if "and is still being built there; the editor takes it as it is" in line:
+            out["warm"]["adoptedBuilding"] += 1
+            continue
+        if "clangd takes it as a change" in line and "before the editor, which has" in line:
             out["warm"]["adoptedWithChange"] += 1
             continue
         if "the editor did not open it" in line:
@@ -488,7 +491,7 @@ def warm_markdown(digests):
         lines.append(f"| {name}: package stores | " + " | ".join("; ".join(server(l, name).get("inputStores") or []) or "-" for l in digests) + " |")
         lines.append(f"| {name}: ahead of the editor | " + " | ".join(
             (lambda w, r: f"opened {w.get('opened', 0)}, adopted {w.get('adopted', 0)} (ready {sorted(r)[len(r) // 2] if r else '-'} ms before), "
-                          f"changed {w.get('adoptedWithChange', 0)}, closed unused {w.get('closedUnused', 0)}")(server(l, name).get("warm") or {}, server(l, name).get("warmReadyMs") or [])
+                          f"adopted while building {w.get('adoptedBuilding', 0)}, changed {w.get('adoptedWithChange', 0)}, closed unused {w.get('closedUnused', 0)}")(server(l, name).get("warm") or {}, server(l, name).get("warmReadyMs") or [])
             for l in digests) + " |")
         lines.append(f"| {name}: startup | " + " | ".join(((server(l, name).get("startup") or ["-"])[-1])[:300] for l in digests) + " |")
     lines.append("| cache on a Dev Drive | " + " | ".join(
