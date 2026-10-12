@@ -200,8 +200,41 @@ def server_lines_digest(text):
     """The lines mcppls 0.0.13 writes for exactly this (docs/50-troubleshooting.md, "What the log says"): what each start
     cost, the health summaries, the versions, why each module was rebuilt and what each file's modules cost."""
     out = {"versions": [], "startup": [], "health": [], "rebuildsByWhy": collections.Counter(), "rebuildSamples": [],
-           "prerequisites": [], "timersSlow": []}
+           "prerequisites": [], "timersSlow": [],
+           # 0.0.14: a slow completion's cost, what the last session left, the files opened ahead of the editor.
+           "completionCosts": [], "memos": [], "inputStores": [], "warm": collections.Counter(), "warmReadyMs": [], "devDrive": None}
+    cost = re.compile(r"Completion in (.*?): (\d+) ms \(module input checks (\d+) ms: (\d+) one by one, (\d+) by (\d+) package checks, "
+                      r"(\d+) system already checked; waited (\d+) ms for modules\)")
     for line in text.splitlines():
+        m = cost.search(line)
+        if m:
+            out["completionCosts"].append({"file": m.group(1).replace("\\", "/").rsplit("/", 1)[-1], "ms": int(m.group(2)), "checksMs": int(m.group(3)),
+                                           "oneByOne": int(m.group(4)), "byPackage": int(m.group(5)), "packageChecks": int(m.group(6)),
+                                           "system": int(m.group(7)), "waitedMs": int(m.group(8))})
+            continue
+        if "Module memos: " in line:
+            out["memos"].append(line.split("Module memos: ", 1)[1][:240])
+            continue
+        if "Module inputs: " in line:
+            out["inputStores"].append(line.split("Module inputs: ", 1)[1][:200])
+            continue
+        if "in clangd ahead of the editor" in line and "opening " in line:
+            out["warm"]["opened"] += 1
+            continue
+        m = re.search(r"was ready in clangd (\d+) ms before the editor opened it", line)
+        if m:
+            out["warm"]["adopted"] += 1
+            out["warmReadyMs"].append(int(m.group(1)))
+            continue
+        if "which has other text; clangd takes it as a change" in line:
+            out["warm"]["adoptedWithChange"] += 1
+            continue
+        if "the editor did not open it" in line:
+            out["warm"]["closedUnused"] += 1
+            continue
+        if "is not on a Dev Drive" in line:
+            out["devDrive"] = False
+            continue
         if "[info] versions (" in line:
             out["versions"].append(line.split("[info] ", 1)[1][:300])
         elif "[info] startup (" in line:
@@ -226,6 +259,12 @@ def server_lines_digest(text):
                                              "built": int(m.group(4)), "failed": int(m.group(5)), "seconds": float(m.group(6)),
                                              "reuseSeconds": float(m.group(7)), "buildSeconds": float(m.group(8))})
     out["prerequisites"] = sorted(out["prerequisites"], key=lambda r: -r["seconds"])[:15]
+    costs = out["completionCosts"]
+    out["completionCostSummary"] = {"count": len(costs), "msP50": pct([c["ms"] for c in costs], 50), "msP95": pct([c["ms"] for c in costs], 95),
+                                    "checksMsP50": pct([c["checksMs"] for c in costs], 50), "checksMsP95": pct([c["checksMs"] for c in costs], 95),
+                                    "oneByOneP50": pct([c["oneByOne"] for c in costs], 50), "byPackageP50": pct([c["byPackage"] for c in costs], 50),
+                                    "systemP50": pct([c["system"] for c in costs], 50), "waitedMsP95": pct([c["waitedMs"] for c in costs], 95)} if costs else None
+    out["completionCosts"] = sorted(costs, key=lambda c: -c["ms"])[:20]
     return out
 
 
@@ -284,7 +323,7 @@ def digest_one(root):
     root = pathlib.Path(root)
     found = {}
     for name in ("build", "emit-release-cold", "emit-release", "emit", "e-check", "e-diag", "e-warm-pure", "e-typing-plain", "e-typing-autosave", "e-warm",
-                 "e-bundle", "e-steady", "e-steady-typing", "e-buildmcpp"):
+                 "e-bundle", "e-steady", "e-steady-typing", "e-asyoutype", "e-buildmcpp"):
         try:
             found[name] = experiment(root / name)
         except Exception as error:   # one unreadable experiment does not lose the others
@@ -411,6 +450,72 @@ def startup_markdown(digests):
     return "\n".join(lines) + "\n"
 
 
+EXPERIMENTS_WITH_LOGS = ("e-diag", "e-warm-pure", "e-typing-plain", "e-typing-autosave", "e-steady", "e-steady-typing", "e-asyoutype", "e-buildmcpp")
+
+
+def costs_markdown(digests):
+    """What each slow completion's checks cost, by experiment (mcppls-clangd 0.0.15's cost lines)."""
+    lines = ["# slow completions: where the time went", "",
+             "From clangd's `Completion in <file>: <ms> ms (module input checks ...)` lines (200 ms or more). Medians unless p95.", "",
+             "| experiment | " + " | ".join(digests) + " |", "|---|" + "---|" * len(digests)]
+    for name in EXPERIMENTS_WITH_LOGS:
+        cells = []
+        for label in digests:
+            summary = (((digests[label].get(name) or {}).get("server") or {}).get("completionCostSummary"))
+            cells.append("-" if not summary else (f"{summary['count']} slow; {summary['msP50']} ms (p95 {summary['msP95']}); checks {summary['checksMsP50']} ms "
+                                                 f"(p95 {summary['checksMsP95']}); {summary['oneByOneP50']} one by one, {summary['byPackageP50']} by package, "
+                                                 f"{summary['systemP50']} system; waited p95 {summary['waitedMsP95']} ms"))
+        lines.append(f"| {name} | " + " | ".join(cells) + " |")
+    lines += ["", "## the slowest, per run", ""]
+    for label in digests:
+        lines.append(f"### {label}")
+        for name in EXPERIMENTS_WITH_LOGS:
+            costs = (((digests[label].get(name) or {}).get("server") or {}).get("completionCosts")) or []
+            for c in costs[:5]:
+                lines.append(f"- {name}: {c['file']} {c['ms']} ms, checks {c['checksMs']} ms ({c['oneByOne']} one by one, {c['byPackage']} by "
+                             f"{c['packageChecks']} package checks, {c['system']} system), waited {c['waitedMs']} ms")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def warm_markdown(digests):
+    """A second opening: what the last session left, and the files opened ahead of the editor."""
+    lines = ["# opening again", "", "| | " + " | ".join(digests) + " |", "|---|" + "---|" * len(digests)]
+    def server(label, name):
+        return ((digests[label].get(name) or {}).get("server") or {})
+    for name in ("e-diag", "e-warm-pure", "e-steady"):
+        lines.append(f"| {name}: memos kept | " + " | ".join("; ".join(server(l, name).get("memos") or []) or "-" for l in digests) + " |")
+        lines.append(f"| {name}: package stores | " + " | ".join("; ".join(server(l, name).get("inputStores") or []) or "-" for l in digests) + " |")
+        lines.append(f"| {name}: ahead of the editor | " + " | ".join(
+            (lambda w, r: f"opened {w.get('opened', 0)}, adopted {w.get('adopted', 0)} (ready {sorted(r)[len(r) // 2] if r else '-'} ms before), "
+                          f"changed {w.get('adoptedWithChange', 0)}, closed unused {w.get('closedUnused', 0)}")(server(l, name).get("warm") or {}, server(l, name).get("warmReadyMs") or [])
+            for l in digests) + " |")
+        lines.append(f"| {name}: startup | " + " | ".join(((server(l, name).get("startup") or ["-"])[-1])[:300] for l in digests) + " |")
+    lines.append("| cache on a Dev Drive | " + " | ".join(
+        "no" if any(server(l, n).get("devDrive") is False for n in EXPERIMENTS_WITH_LOGS) else "yes or unknown" for l in digests) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def typing_markdown(digests):
+    """Typing: latency and what the editor's way of asking cost (e-asyoutype asks as VS Code does while a word is typed)."""
+    lines = ["# typing", "", "| | " + " | ".join(digests) + " |", "|---|" + "---|" * len(digests)]
+    for name in ("e-typing-plain", "e-typing-autosave", "e-steady-typing", "e-asyoutype"):
+        def cell(label):
+            summary = (digests[label].get(name) or {}).get("summary") or {}
+            if not summary:
+                return "-"
+            reask = summary.get("reask")
+            text = f"alive {summary.get('serverAlive')}, failed {summary.get('failedRequests')}"
+            if reask and reask.get("words"):
+                text += (f"; {reask['asked']} asked for {reask['words']} words ({reask['asked'] / reask['words']:.2f} a word), "
+                         f"{reask['incomplete']} again for an incomplete answer; {reask.get('keysWhilePending', 0)} keys typed while an answer was on its way")
+            return text
+        lines.append(f"| {name} | " + " | ".join(cell(l) for l in digests) + " |")
+        latency = [((digests[l].get(name) or {}).get("latency") or {}) for l in digests]
+        lines.append(f"| {name}: latency | " + " | ".join(json.dumps(x)[:300] if x else "-" for x in latency) + " |")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("inputs", nargs="+")
@@ -434,6 +539,9 @@ def main():
         (out / "summary.md").write_text(head, encoding="utf-8")
         (out / "why.md").write_text("## why" + why if why else "no reasons recorded\n", encoding="utf-8")
         (out / "startups.md").write_text(startup_markdown(digests), encoding="utf-8")
+        (out / "costs.md").write_text(costs_markdown(digests), encoding="utf-8")
+        (out / "warm.md").write_text(warm_markdown(digests), encoding="utf-8")
+        (out / "typing.md").write_text(typing_markdown(digests), encoding="utf-8")
         for label, digest in digests.items():
             (out / "json" / label).mkdir(parents=True, exist_ok=True)
             for name, node in digest.items():

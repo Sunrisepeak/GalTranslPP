@@ -478,16 +478,38 @@ def typing(args):
 
     threading.Thread(target=poller, daemon=True).start()
 
-    def complete(kind):
+    # --reask: completion asked as VS Code asks it while a word is typed -- the word's first character asks; the keys typed
+    # while that answer is on its way wait for it (the editor filters it by them), and once it is in the next key asks
+    # again only when it was marked incomplete. Each such row says why it was asked.
+    word = {"active": False, "pending": False, "incomplete": False}
+
+    def complete(kind, why=None):
         line, col = editor.line, editor.col
         prefix = editor.lines[line][:col]
         def work():
-            timed(lab, f"completion:{kind}", "textDocument/completion",
-                  {"textDocument": {"uri": editor.uri}, "position": {"line": line, "character": col}, "context": {"triggerKind": 1}}, args.request_timeout, rows, "typing",
-                  {"version": editor.version, "line": line + 1, "col": col, "prefix": prefix[-40:]}, expect=expected_at(prefix))
+            row = timed(lab, f"completion:{kind}", "textDocument/completion",
+                        {"textDocument": {"uri": editor.uri}, "position": {"line": line, "character": col}, "context": {"triggerKind": 1}}, args.request_timeout, rows, "typing",
+                        {"version": editor.version, "line": line + 1, "col": col, "prefix": prefix[-40:], **({"why": why} if why else {})}, expect=expected_at(prefix))
+            if kind == "word":
+                word["pending"] = False
+                word["incomplete"] = bool(row.get("incomplete"))
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
         workers.append(thread)
+
+    def as_typed(ch):
+        if not args.reask:
+            return
+        if not (ch.isalnum() or ch == "_"):
+            word.update(active=False, pending=False, incomplete=False)
+            return
+        if word["active"] and word["pending"]:
+            word["waited"] = word.get("waited", 0) + 1
+            return
+        why = "first" if not word["active"] else "incomplete" if word["incomplete"] else None
+        if why:
+            word.update(active=True, pending=True)
+            complete("word", why)
 
     def sleep(seconds):
         end = now() + seconds
@@ -501,6 +523,7 @@ def typing(args):
                 complete("typed")
                 continue
             editor.insert(ch)
+            as_typed(ch)
             editor.tick_autosave()
             time.sleep(cadence)
 
@@ -588,9 +611,15 @@ def typing(args):
     for row in poll:
         states[row["state"]] = states.get(row["state"], 0) + 1
     stalls = [row for row in rows if row["status"] != "ok"]
+    asked = [row for row in rows if row.get("kind") == "completion:word"]
+    reask = {"words": sum(1 for row in asked if row.get("why") == "first"),
+             "asked": len(asked),
+             "keysWhilePending": word.get("waited", 0),
+             "incomplete": sum(1 for row in asked if row.get("why") == "incomplete"),
+             "answeredIncomplete": sum(1 for row in asked if row.get("incomplete"))} if args.reask else None
     write_json(out / "summary.json", {"kind": "typing", "autosave": args.autosave, "seconds": round(now() - started, 1), "cycles": cycle, "saves": editor.saves,
                                      "serverAlive": alive, "stateSeconds": states, "stderr": counts, "latency": stats(rows),
-                                     "failedRequests": len(stalls), "statusChanges": len(lab.status_history)})
+                                     "failedRequests": len(stalls), "statusChanges": len(lab.status_history), "reask": reask})
     return 0
 
 
@@ -996,6 +1025,7 @@ def main():
     common(two)
     two.add_argument("--duration", type=int, default=180)
     two.add_argument("--autosave", action="store_true")
+    two.add_argument("--reask", action="store_true", help="also ask as VS Code asks while a word is typed")
     two.add_argument("--also", nargs="*", default=[])
     two.add_argument("--request-timeout", type=int, default=60)
     two.add_argument("--report-every", type=int, default=20)

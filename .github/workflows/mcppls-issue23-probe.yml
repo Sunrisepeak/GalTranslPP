@@ -45,18 +45,19 @@ jobs:
     name: probe (mcppls ${{ matrix.label }})
     runs-on: windows-2025
     timeout-minutes: 350
-    # The 0.0.13 candidate (the payload its PR's CI built) beside 0.0.12, the last release: the same project, the same
-    # experiments, side by side. The digest job below reads both and keeps the core of each in small files.
+    # The 0.0.14 candidate (the payload its PR's CI built, with the mcppls-clangd 0.0.15 candidate) beside 0.0.13 (the
+    # payload main's CI built for it): the same project, the same experiments, side by side. The digest job below reads
+    # both and keeps the core of each in small files.
     strategy:
       fail-fast: false
       matrix:
         include:
+          - label: '0.0.14'
+            run: 'CANDIDATE_RUN'
+            version: '0.0.14'
           - label: '0.0.13'
-            run: '38174457780'
+            run: '38209887335'
             version: '0.0.13'
-          - label: '0.0.12'
-            run: ''
-            version: '0.0.12'
     env:
       MCPPLS_VERSION: ${{ inputs.mcppls_version || matrix.version }}
       MCPPLS_RUN: ${{ inputs.mcppls_run || matrix.run }}
@@ -293,6 +294,21 @@ jobs:
           git checkout -- GalTranslPP
           sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
 
+      # E-asyoutype: on the warm cache, completion asked as VS Code asks it while a word is typed -- at the word's first
+      # character, and again while the last answer is not in or is marked incomplete -- beside the usual typing. The
+      # digest's typing.md says how many asks a word cost and why; costs.md what each slow completion's checks cost.
+      - name: E-asyoutype (completion as a word is typed)
+        continue-on-error: true
+        timeout-minutes: 40
+        run: |
+          set +e
+          root="$(pwd -W)"
+          python "$LAB" copy --src D:/mcppls-cache/diag --dst D:/mcppls-cache/asyoutype
+          python "$LAB" typing --mcppls "$MCPPLS" --payload "$PAYLOAD" --cache-dir D:/mcppls-cache/asyoutype \
+            --root "$root" --out "$OUT/e-asyoutype" --duration 200 --reask --also GalTranslPP/NormalJsonTranslator.TransAgent.cpp
+          git checkout -- GalTranslPP
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+
       # E-buildmcpp: the project's build.mcpp edited with autosave -- a comment, then a call that does not compile, then the
       # call removed: how often mcpp is asked, whether clangd restarts, what the status says, whether the targets keep
       # their diagnostics. build.mcpp is put back.
@@ -370,7 +386,7 @@ jobs:
           args=()
           for d in probes/mcppls-probe-*; do args+=("${d#probes/mcppls-probe-}=$d"); done
           python3 .github/mcppls-probe/digest.py "${args[@]}" --out-dir digest
-          cat digest/summary.md digest/startups.md >> "$GITHUB_STEP_SUMMARY"
+          cat digest/summary.md digest/startups.md digest/warm.md digest/typing.md digest/costs.md >> "$GITHUB_STEP_SUMMARY"
           ls -la digest digest/json/*
       - uses: actions/upload-artifact@v4
         with:
@@ -379,6 +395,9 @@ jobs:
             digest/summary.md
             digest/startups.md
             digest/why.md
+            digest/warm.md
+            digest/typing.md
+            digest/costs.md
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
