@@ -10,7 +10,6 @@
 name: mcppls issue-23 probe
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       mcppls_version:
