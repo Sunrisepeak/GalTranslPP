@@ -18,6 +18,13 @@ name: engine bench
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      engines:
+        description: The jobs to run, a JSON list (default all five)
+        default: ''
+      merge_run:
+        description: A run of this workflow whose job digests the report takes too (for the jobs not run here)
+        default: ''
 
 concurrency:
   group: engine-bench-${{ github.ref }}-${{ github.sha }}
@@ -35,8 +42,9 @@ env:
   MCPPLS_RUN: '38318839114'
   # clice main (62218ec) built by its CI: the nightly v0.1.2026101209 (fb0fa5d) skips every .ixx entry of a database.
   CLICE_RUN: '38269140127'
-  # The mcxx engine: speak-agent/mcpp-language-server PR #2 (mcxx-engine f5fe74d, libmc++ ad3fdc6).
-  MCXX_RUN: '38326799989'
+  # The mcxx engine: the newest mcxx-release-win32-x64 artifact of speak-agent/mcpp-language-server
+  # (PR #2: mcxx-engine f5fe74d, libmc++ ad3fdc6).
+  MCXX_REPO: speak-agent/mcpp-language-server
 
 jobs:
   bench:
@@ -46,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [deep, clangd, mcppls, clice, mcxx]
+        engine: ${{ fromJSON(inputs.engines || '["deep", "clangd", "mcppls", "clice", "mcxx"]') }}
     defaults:
       run:
         shell: bash
@@ -223,8 +231,12 @@ jobs:
           set +e
           mkdir -p /c/mcxx && cd /c/mcxx
           for attempt in $(seq 1 50); do
-            if gh run download "$MCXX_RUN" -R speak-agent/mcpp-language-server -n mcxx-release-win32-x64 -D . 2>/dev/null; then break; fi
-            echo "mcxx-release-win32-x64 of run $MCXX_RUN not there yet ($attempt)"; sleep 240
+            run=$(gh api "repos/$MCXX_REPO/actions/artifacts?name=mcxx-release-win32-x64&per_page=5" \
+                  --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+            if [ -n "$run" ] && gh run download "$run" -R "$MCXX_REPO" -n mcxx-release-win32-x64 -D .; then
+              gh run view "$run" -R "$MCXX_REPO" --json headSha,headBranch,url > "$OUT/mcxx-run.json"; break
+            fi
+            echo "no mcxx-release-win32-x64 yet ($attempt)"; sleep 240
           done
           tar -xzf mcxx-win32-x64.tar.gz || { echo "::error::no mcxx payload"; exit 0; }
           payload=$(cygpath -m /c/mcxx/payload)
@@ -284,6 +296,15 @@ jobs:
         with:
           pattern: bench-*-digest
           path: digests
+      - name: The other run's digests (the jobs not run here)
+        if: inputs.merge_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p other
+          gh run download "${{ inputs.merge_run }}" -R "${{ github.repository }}" -p 'bench-*-digest' -D other || true
+          for d in other/bench-*-digest; do [ -e "digests/${d#other/}" ] || cp -r "$d" digests/; done
+          ls digests
       - name: Report
         run: |
           python3 .github/engine-bench/digest.py report --in digests --out report
