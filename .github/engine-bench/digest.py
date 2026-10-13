@@ -145,7 +145,7 @@ def scan_log(path, limit=12):
                         seen.add(shape)
                         examples[kind].append(line.strip()[:300])
     # The engines' own timings.
-    cost = [int(m.group(1)) for m in re.finditer(r"Completion in [^:]+: (\d+) ms", text)]
+    cost = [int(m.group(1)) for m in re.finditer(r"Completion in .+?: (\d+) ms \(module input checks", text)]
     checks = [int(m.group(1)) for m in re.finditer(r"module input checks (\d+) ms", text)]
     clice = collections.defaultdict(list)
     for m in re.finditer(r"\[perf:request\] kind=(\w+) .*?total_ms=([\d.]+)", text):

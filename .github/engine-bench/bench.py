@@ -305,6 +305,10 @@ def server_command(args, cache):
     if kind in ("mcppls", "mcxx"):
         env["MCPPLS_CACHE_DIR"] = cache
         argv = [args.exe, "serve", "--payload", args.payload, "--log-level", "info"]
+        if kind == "mcxx":
+            # The fork is based on 0.0.6, which gives mcpp 60 s to describe the project; mcpp takes about 75 s here
+            # (0.0.14: five minutes the first time). Without this the engine works from a scan, without any flags.
+            argv += ["--producer-timeout", "600"]
         options = {"compiler": None, "semanticKit": "auto", "engine": "clangd" if kind == "mcppls" else "mcxx", "toolEnvironment": "auto",
                    "conflictArbitration": "client", "semanticTokens": {"modules": True, "moduleType": True},
                    "completion": {"triggerOnSpace": True}, "buildDiscovery": "auto", "index.primeImplementationUnits": "auto"}
