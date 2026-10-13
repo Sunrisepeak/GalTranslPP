@@ -316,12 +316,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           rm -rf digests && mkdir -p digests raw
+          # label=run, or label=run:engine,engine to take only those jobs of the run
           for pair in ${{ inputs.redigest_runs }}; do
-            label=${pair%%=*}; run=${pair#*=}
+            label=${pair%%=*}; rest=${pair#*=}; run=${rest%%:*}; only=""
+            [ "$rest" != "$run" ] && only=",${rest#*:},"
             gh run download "$run" -R "${{ github.repository }}" -p 'bench-*-raw' -D "raw/$label" || true
             for d in raw/$label/bench-*-raw; do
               [ -d "$d" ] || continue
               engine=${d#raw/$label/bench-}; engine=${engine%-raw}
+              [ -z "$only" ] || [[ "$only" == *",$engine,"* ]] || continue
               python3 .github/engine-bench/digest.py job --engine "$engine" --in "$d" --out "digests/$label/bench-$engine-digest" || true
             done
           done
