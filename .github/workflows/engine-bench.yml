@@ -6,6 +6,8 @@
 #   clangd  clangd 23.1.0-mcppls.3 (the engine mcpp-language-server 0.0.14 carries) run directly, as a user of a
 #           compile_commands.json runs it (the database mcppls gives clangd, without its module hints)
 #   mcppls  mcpp-language-server 0.0.14 with that clangd (the product, as the VS Code extension runs it)
+#   next    the next mcpp-language-server, from its pull request's CI (its payload, its engine), the same way, with the
+#           answer-layer scenarios and the CLI's provenance after the sessions
 #   clice   clice (clice-io/clice main, built by its CI) on the same database
 #   mcxx    mcpp-language-server's mcxx engine (libmc++ in process, no clangd), built by speak-agent's fork
 # Every server gets the same files open (GalTranslPP/bench/Bench*.cpp: one body, the libraries by #include, by
@@ -43,6 +45,8 @@ env:
   OUT: D:/bench-out
   # mcpp-language-server 0.0.14: main's CI run of the released commit (payload-win32-x64).
   MCPPLS_RUN: '38318839114'
+  # The next mcpp-language-server: its pull request's CI run (payload-win32-x64).
+  MCPPLS_NEXT_RUN: 'PENDING'
   # clice main (62218ec) built by its CI: the nightly v0.1.2026101209 (fb0fa5d) skips every .ixx entry of a database.
   CLICE_RUN: '38269140127'
   # The mcxx engine: the newest mcxx-release-win32-x64 artifact of speak-agent/mcpp-language-server
@@ -58,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: ${{ fromJSON(inputs.engines || '["deep", "clangd", "mcppls", "clice", "mcxx"]') }}
+        engine: ${{ fromJSON(inputs.engines || '["mcppls", "next"]') }}
     defaults:
       run:
         shell: bash
@@ -156,7 +160,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /c/mcppls && cd /c/mcppls
-          gh run download "$MCPPLS_RUN" -R Sunrisepeak/mcpp-language-server -n payload-win32-x64 -D .
+          run="$MCPPLS_RUN"; [ "${{ matrix.engine }}" = next ] && run="$MCPPLS_NEXT_RUN"
+          gh run download "$run" -R Sunrisepeak/mcpp-language-server -n payload-win32-x64 -D .
           tar -xzf payload-win32-x64.tar.gz
           payload=$(cd "$(dirname "$(find . -name mcppls.exe | head -1)")/.." && pwd -W)
           echo "PAYLOAD=$payload" >> "$GITHUB_ENV"
@@ -167,7 +172,7 @@ jobs:
 
       # The sessions read the profile the build made (its generated files are on disk).
       - name: The engine database (mcppls model --export engine)
-        continue-on-error: ${{ matrix.engine == 'mcppls' || matrix.engine == 'mcxx' }}
+        continue-on-error: ${{ matrix.engine == 'mcppls' || matrix.engine == 'next' || matrix.engine == 'mcxx' }}
         run: |
           set -euo pipefail
           sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
@@ -203,8 +208,17 @@ jobs:
         timeout-minutes: 200
         run: |
           set +e
-          python "$BENCH" lsp --server mcppls --exe "$MCPPLS" --payload "$PAYLOAD" \
+          python "$BENCH" lsp --server mcppls --exe "$MCPPLS" --payload "$PAYLOAD" --answers \
             --root "$(pwd -W)" --cache D:/bench/cache-mcppls --out "$OUT/mcppls"
+          exit 0
+
+      - name: next -- the next mcpp-language-server
+        if: matrix.engine == 'next'
+        timeout-minutes: 200
+        run: |
+          set +e
+          python "$BENCH" lsp --server mcppls --exe "$MCPPLS" --payload "$PAYLOAD" --answers \
+            --root "$(pwd -W)" --cache D:/bench/cache-next --out "$OUT/next"
           exit 0
 
       - name: clice -- on the database
@@ -339,3 +353,14 @@ jobs:
           name: engine-bench-report
           path: report
           retention-days: 14
+      # The same files one artifact each, so one table is fetched without the rest.
+      - uses: actions/upload-artifact@v4
+        with: { name: report-summary, path: report/report.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-answers, path: report/answers.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-typing, path: report/typing.md, retention-days: 14, if-no-files-found: ignore }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-stability, path: report/stability.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-logs, path: report/logs.md, retention-days: 14 }

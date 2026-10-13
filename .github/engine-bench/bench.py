@@ -353,7 +353,7 @@ def start(args, cache, log_name):
                              "publishDiagnostics": {"relatedInformation": True, "versionSupport": True}},
             "workspace": {"configuration": True, "workspaceFolders": True},
             "window": {"workDoneProgress": True},
-            "experimental": {"cxxModules": {"version": 1, "status": True}},
+            "experimental": {"cxxModules": {"version": 1, "status": True, "completionReady": True}},
         },
         "clientInfo": {"name": "Visual Studio Code", "version": "1.105.0"},
     }
@@ -633,6 +633,148 @@ def typing(client, rel, text, anchor, line, asks, seconds_per_char, out_rows):
     return text
 
 
+def marked(result):
+    """Items a server marked as doubted (mcppls 0.0.15: `·` at the end of labelDetails.description)."""
+    items = result.get("items") if isinstance(result, dict) else []
+    return sum(1 for item in items or [] if isinstance(item, dict)
+               and str((item.get("labelDetails") or {}).get("description", "")).endswith("\u00b7"))
+
+
+def answer_scenarios(client, texts, out):
+    """What a person meets of an answer layer: the same question again, a list typed and deleted before it came, the
+    same name in another file, a class that changed. Each step is one row: how long, right or not, how marked."""
+    def version():
+        version.n += 1
+        return version.n
+    version.n = 900000
+
+    def change(rel, text):
+        client.notify("textDocument/didChange", {"textDocument": {"uri": uri_of(pathlib.Path(rel).resolve()), "version": version()},
+                                                 "contentChanges": [{"text": text}]})
+
+    def ask_at(scenario, step, rel, method, line, character, expect, timeout=30, cancel_after=None):
+        lsp_method = {"completion": "textDocument/completion", "hover": "textDocument/hover", "definition": "textDocument/definition"}[method]
+        params = {"textDocument": {"uri": uri_of(pathlib.Path(rel).resolve())}, "position": {"line": line, "character": character}}
+        if method == "completion":
+            params["context"] = {"triggerKind": 2, "triggerCharacter": "."} if cancel_after is not None else {"triggerKind": 1}
+        request_id, started, sent = client.begin(lsp_method, params)
+        if cancel_after is not None:
+            time.sleep(cancel_after)
+            if request_id in client.waiters:
+                client.notify("$/cancelRequest", {"id": request_id})
+        answer = client.finish(request_id, started, sent, timeout, cancel=False)
+        row = {"scenario": scenario, "step": step, "t": client.t(), "file": rel, "method": method, "status": answer["status"],
+               "seconds": answer["seconds"]}
+        if answer["status"] == "ok":
+            row["count"], row["right"], row["said"], row["incomplete"] = judge(method, answer.get("result"), expect)
+            if method == "completion":
+                row["marked"] = marked(answer.get("result"))
+        out.append(row)
+        return row
+
+    def ask_point(scenario, step, rel, point):
+        for name, method, needle, offset, expect in points_of(rel):
+            if name == point:
+                where = locate(texts[rel], needle, offset)
+                if where:
+                    return ask_at(scenario, step, rel, method, where[0], where[1], expect)
+        out.append({"scenario": scenario, "step": step, "file": rel, "point": point, "status": "no-such-point"})
+        return None
+
+    def with_line(rel, anchor, line):
+        """The text with `line` after the line holding `anchor`, and where the line ends."""
+        text = texts[rel]
+        at = text.find(anchor)
+        if at < 0:
+            return None, None
+        insert_at = text.find("\n", at) + 1
+        return text[:insert_at] + line + "\n" + text[insert_at:], (text.count("\n", 0, insert_at), len(line))
+
+    bench_h, bench_hx, run = "GalTranslPP/bench/BenchH.cpp", "GalTranslPP/bench/BenchHX.cpp", "GalTranslPP/NormalJsonTranslator.Run.cpp"
+    # 1. The same question again: completion, hover and the jump at points every round asked before.
+    for rel in [r for r in (bench_h, "GalTranslPP/bench/BenchX.cpp", run) if r in texts]:
+        for point in ("json.", "std::", "hover:dump", "definition:dump", "hover:get_ref", "definition:gppTr"):
+            if any(p[0] == point for p in points_of(rel)):
+                ask_point("again", "first", rel, point)
+                ask_point("again", "second", rel, point)
+    # 2. Typed, given up before the list came, deleted, typed again.
+    if bench_h in texts:
+        typed, place = with_line(bench_h, "        const std::string text", "        doc.")
+        if typed:
+            line, column = place
+            change(bench_h, typed)
+            ask_at("typed-deleted", "typed-and-left", bench_h, "completion", line, column, ["dump", "size"], cancel_after=0.3)
+            change(bench_h, texts[bench_h])
+            time.sleep(6)
+            change(bench_h, typed)
+            ask_at("typed-deleted", "typed-again", bench_h, "completion", line, column, ["dump", "size"])
+            change(bench_h, texts[bench_h])
+    # 3. The same name, asked first in another file.
+    for rel, anchor, indent in ((bench_hx, "        const std::string text", "        "), (run, "    std::vector<fs::path> relFilePaths", "    ")):
+        if rel in texts:
+            typed, place = with_line(rel, anchor, indent + "std::")
+            if typed:
+                line, column = place
+                change(rel, typed)
+                ask_at("other-file", "std::", rel, "completion", line, column, STD_NAMES)
+                change(rel, texts[rel])
+    # 4. A class that changed: its members as the engine gave them, then one added in the text.
+    if bench_h in texts:
+        shape = "\nstruct ProbeShape { int width; };\nint probe_shape() { ProbeShape shape; return shape.width; }\n"
+        grown = shape.replace("{ int width; }", "{ int width; int height; }")
+        for step, extra in (("engine", shape), ("member-added", grown)):
+            text = texts[bench_h] + extra
+            change(bench_h, text)
+            where = locate(text, "shape.width", 6)
+            if where is None:
+                break
+            ask_at("class-changed", step, bench_h, "completion", where[0], where[1], ["height"] if step == "member-added" else ["width"])
+        change(bench_h, texts[bench_h])
+    time.sleep(2)
+
+
+def server_report(client):
+    """The server's own account (mcppls: cxxModules/report): its answer layer and how requests were answered."""
+    answer = client.request("cxxModules/report", {}, timeout=60)
+    result = answer.get("result") if answer["status"] == "ok" else None
+    if not isinstance(result, dict):
+        return {"status": answer["status"]}
+    roots = [r for r in result.get("roots") or [] if isinstance(r, dict)]
+    methods = ("textDocument/completion", "textDocument/hover", "textDocument/definition")
+    return {"status": "ok", "answers": [r.get("answers") for r in roots],
+            "requests": [{m: (r.get("requests") or {}).get(m) for m in methods} for r in roots]}
+
+
+def cli_queries(args, cache, texts):
+    """`mcppls query symbol --at` on the cache the editor sessions left: once as an agent asks (kept answers may stand
+    in, said in provenance), once with --fresh."""
+    rel = "GalTranslPP/bench/BenchH.cpp"
+    if rel not in texts:
+        return []
+    where = locate(texts[rel], "doc.dump()", 5)
+    env = dict(os.environ)
+    env["MCPPLS_CACHE_DIR"] = cache
+    rows = []
+    for extra in ([], ["--fresh"]):
+        argv = [args.exe, "query", "symbol", "--at", f"{rel}:{where[0] + 1}:{where[1] + 1}", "--root", str(pathlib.Path(args.root).resolve()),
+                "--payload", args.payload, "--format", "json", "--timeout", "600"] + extra
+        started = now()
+        try:
+            done = subprocess.run(argv, cwd=args.root, env=env, capture_output=True, timeout=900)
+            output = done.stdout.decode("utf-8", "replace")
+            try:
+                parsed = json.loads(output)
+            except ValueError:
+                parsed = None
+            rows.append({"args": extra, "exit": done.returncode, "seconds": round(now() - started, 2),
+                         "provenance": parsed.get("provenance") if isinstance(parsed, dict) else None,
+                         "symbols": len(parsed.get("symbols") or []) if isinstance(parsed, dict) else None,
+                         "error": None if parsed is not None else (output + done.stderr.decode("utf-8", "replace"))[-400:]})
+        except subprocess.TimeoutExpired:
+            rows.append({"args": extra, "exit": None, "seconds": round(now() - started, 2), "timeout": True})
+    return rows
+
+
 def lsp(args):
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -664,14 +806,20 @@ def lsp(args):
                     if client.closed.is_set():
                         break
                     typing(client, rel, texts[rel], anchor, line, asks, args.char_seconds, typed)
+        scenarios = []
+        if args.answers and not client.closed.is_set():
+            answer_scenarios(client, texts, scenarios)
+        report = server_report(client) if args.server in ("mcppls", "mcxx") and not client.closed.is_set() else None
         died = client.closed.is_set()   # before we asked it to stop
         ended = stop(client, tree)
         ended["diedEarly"] = died
         record = {"init": init, "settle": settled, "diagnostics": diagnostics, "semanticTokens": dict(tokens), "requests": rows, "requestStats": stats(rows),
-                  "typing": typed, "status": client.status[:60], "progress": dict(client.progress), "methods": dict(client.methods), "messages": client.messages[:40],
+                  "typing": typed, "answers": scenarios, "serverReport": report, "status": client.status[:60], "progress": dict(client.progress), "methods": dict(client.methods), "messages": client.messages[:40],
                   "tree": tree.summary(), "end": ended}
         write_json(out / f"{run}.json", record)
         result[run] = {"settled": settled["settled"], "after": settled["after"], "exit": ended}
+    if args.answers and args.server == "mcppls":
+        result["cli"] = cli_queries(args, args.cache, {rel: pathlib.Path(rel).read_bytes().decode("utf-8-sig", errors="replace") for rel in files})
     write_json(out / "lsp.json", result)
     return 0
 
@@ -957,6 +1105,7 @@ def main():
     one.add_argument("--typing-lines", type=int, default=2)
     one.add_argument("--char-seconds", type=float, default=0.12)
     one.add_argument("--no-warm", action="store_true")
+    one.add_argument("--answers", action="store_true", help="the answer-layer scenarios, and the CLI's provenance after the runs")
     two = commands.add_parser("cdb")
     two.add_argument("--mcppls", required=True)
     two.add_argument("--payload", required=True)

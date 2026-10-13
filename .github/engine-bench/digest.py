@@ -17,7 +17,7 @@ import statistics
 BENCH = ["BenchH", "BenchM", "BenchMG", "BenchHX", "BenchX"]
 VARIANT = {"BenchH": "H: headers", "BenchM": "M: modules", "BenchMG": "MG: modules via GPPDefines",
            "BenchHX": "HX: headers + platform headers", "BenchX": "X: mixed (platform headers + modules)"}
-ENGINES = ["mcppls", "mcxx", "clangd", "clice"]
+ENGINES = ["next", "mcppls", "mcxx", "clangd", "clice"]
 
 
 def load(path):
@@ -280,6 +280,50 @@ def lsp_markdown(engine, m):
     return out
 
 
+def answer_layer(lsp):
+    """The answer-layer scenarios, the server's own counts and the CLI's provenance, as the lsp runs left them."""
+    layer = {}
+    for run in ("cold", "warm"):
+        record = load(lsp / f"{run}.json") or {}
+        if record.get("answers") or record.get("serverReport"):
+            layer[run] = {"scenarios": record.get("answers") or [], "report": record.get("serverReport"),
+                          "completionReady": (record.get("methods") or {}).get("cxxModules/completionReady", 0)}
+    cli = (load(lsp / "lsp.json") or {}).get("cli")
+    if cli:
+        layer["cli"] = cli
+    return layer
+
+
+def answer_markdown(engine, layer):
+    md = [f"## {engine}: answers", ""]
+    for run in ("cold", "warm"):
+        one = layer.get(run)
+        if not one:
+            continue
+        md += [f"### {run}", "", f"`cxxModules/completionReady` sent: {one['completionReady']}", "",
+               "| scenario | step | file | method | status | s | right | items | marked | incomplete |", "|---|---|---|---|---|---|---|---|---|---|"]
+        for r in one["scenarios"]:
+            md.append(f"| {r.get('scenario')} | {r.get('step')} | {short(r.get('file', ''))} | {r.get('method', r.get('point', ''))} | {r.get('status')} | "
+                      f"{fmt(r.get('seconds'), '')} | {r.get('right', '')} | {r.get('count', '')} | {r.get('marked', '')} | {r.get('incomplete', '')} |")
+        report = one.get("report") or {}
+        for answers in report.get("answers") or []:
+            if answers:
+                md += ["", f"server answers: entries {answers.get('entries')}, {answers.get('kilobytes')} KB, types {answers.get('types')}; "
+                           f"given {answers.get('answers')}; from cache {answers.get('fromCache')}; from engine {answers.get('fromEngine')}; "
+                           f"replaced {answers.get('replaced')}; in doubt {answers.get('itemsInDoubt')}; background {answers.get('background')}"]
+        for requests in report.get("requests") or []:
+            for method, v in (requests or {}).items():
+                if v:
+                    md.append(f"- {method}: answeredBy {v.get('answeredBy')}, p50 {v.get('p50Ms')} ms, p95 {v.get('p95Ms')} ms")
+        md.append("")
+    if layer.get("cli"):
+        md += ["### mcppls query symbol --at (after the sessions)", "", "| args | exit | s | symbols | provenance |", "|---|---|---|---|---|"]
+        for r in layer["cli"]:
+            md.append(f"| {' '.join(r.get('args') or []) or '(none)'} | {r.get('exit')} | {r.get('seconds')} | {r.get('symbols')} | "
+                      f"`{json.dumps(r.get('provenance'), ensure_ascii=False)[:300] if r.get('provenance') else (r.get('error') or '')[:200]}` |")
+    return md
+
+
 def job(args):
     base = pathlib.Path(args.inp)
     out = pathlib.Path(args.out)
@@ -309,6 +353,10 @@ def job(args):
             if scanned and (scanned["counts"]["error"] or scanned["counts"]["crash"] or path.name == "master.log"):
                 logs[f"clice/{path.parent.name[-8:]}/{path.name}"] = scanned
         md += lsp_markdown(engine, result)
+        layer = answer_layer(lsp)
+        if layer:
+            result["answerLayer"] = layer
+            (out / f"{engine}-answers.md").write_text("\n".join(answer_markdown(engine, layer)) + "\n", encoding="utf-8")
     dumps = result["dumps"]
     if dumps:
         md += ["", f"Crash dumps: {dumps if isinstance(dumps, list) else [dumps]}"]
@@ -465,8 +513,10 @@ def report(args):
 
     logs = [path.read_text(encoding="utf-8") for path in sorted(base.glob("**/bench-*-digest/*-logs.md"))]
     (out / "logs.md").write_text("\n".join(logs), encoding="utf-8")
+    answers = [path.read_text(encoding="utf-8") for path in sorted(base.glob("**/bench-*-digest/*-answers.md"))]
+    (out / "answers.md").write_text("# Answers\n\n" + "\n".join(answers), encoding="utf-8")
     for path in sorted(base.glob("**/bench-*-digest/*.md")):
-        if not path.name.endswith("-logs.md"):
+        if not path.name.endswith("-logs.md") and not path.name.endswith("-answers.md"):
             sample = path.parent.parent.name if path.parent.parent != base else ""
             (out / f"engine-{(sample + '-') if sample else ''}{path.name}").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     return 0
