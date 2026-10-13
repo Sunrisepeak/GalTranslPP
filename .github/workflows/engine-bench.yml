@@ -1,0 +1,366 @@
+# Temporary, not meant to be merged: four C++ language servers on this project on Windows, and the compiler alone,
+# to find out why a project of modules is slower to edit than the same libraries by #include, and what each engine
+# does about it:
+#   deep    the project's LLVM alone (no editor, no cache): parse, deserialization and completion per file; then
+#           clangd --check with its trace: where one completion's time goes, with and without module support
+#   clangd  clangd 23.1.0-mcppls.3 (the engine mcpp-language-server 0.0.14 carries) run directly, as a user of a
+#           compile_commands.json runs it (the database mcppls gives clangd, without its module hints)
+#   mcppls  mcpp-language-server 0.0.14 with that clangd (the product, as the VS Code extension runs it)
+#   next    the next mcpp-language-server, from its pull request's CI (its payload, its engine), the same way, with the
+#           answer-layer scenarios and the CLI's provenance after the sessions
+#   clice   clice (clice-io/clice main, built by its CI) on the same database
+#   mcxx    mcpp-language-server's mcxx engine (libmc++ in process, no clangd), built by speak-agent's fork
+# Every server gets the same files open (GalTranslPP/bench/Bench*.cpp: one body, the libraries by #include, by
+# import, through the aggregate module, and mixed; and five of the project's heavy files), the same requests at the
+# same points, the same typing, and a second start on the same cache. Each job digests its own evidence into small
+# files (bench-<engine>-digest); the report job puts them side by side (engine-bench-report). The raw logs are a
+# separate artifact per job, only for digging further.
+name: engine bench
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: The jobs to run, a JSON list (default all five)
+        default: ''
+      merge_run:
+        description: A run of this workflow whose job digests the report takes too (for the jobs not run here)
+        default: ''
+      redigest_runs:
+        description: 'Only the report: digest these runs'' raw evidence again, as samples ("A=<run id> B=<run id>")'
+        default: ''
+
+concurrency:
+  group: engine-bench-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  XLINGS_NON_INTERACTIVE: '1'
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  LLVM_VERSION: 22.1.8                 # mcpp.toml [toolchain] windows
+  BENCH: .github/engine-bench/bench.py
+  DIGEST: .github/engine-bench/digest.py
+  OUT: D:/bench-out
+  # mcpp-language-server 0.0.14: main's CI run of the released commit (payload-win32-x64).
+  MCPPLS_RUN: '38318839114'
+  # The next mcpp-language-server: its pull request's CI run (payload-win32-x64; Sunrisepeak/mcpp-language-server#57 at 542d3c8).
+  MCPPLS_NEXT_RUN: '38398755091'
+  # clice main (62218ec) built by its CI: the nightly v0.1.2026101209 (fb0fa5d) skips every .ixx entry of a database.
+  CLICE_RUN: '38269140127'
+  # The mcxx engine: the newest mcxx-release-win32-x64 artifact of speak-agent/mcpp-language-server
+  # (PR #2: mcxx-engine f5fe74d, libmc++ ad3fdc6).
+  MCXX_REPO: speak-agent/mcpp-language-server
+
+jobs:
+  bench:
+    name: ${{ matrix.engine }}
+    if: inputs.redigest_runs == '' || inputs.redigest_runs == null
+    runs-on: windows-2025
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(inputs.engines || '["mcppls", "next"]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Crash dumps (WER LocalDumps) and the runner
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force D:\bench-out\dumps | Out-Null
+          $wer = 'HKLM:\SOFTWARE\Microsoft\Windows Error Reporting'
+          New-Item -Path $wer -Force | Out-Null
+          New-ItemProperty -Path $wer -Name Disabled -PropertyType DWord -Value 0 -Force | Out-Null
+          foreach ($exe in 'clangd.exe', 'mcppls.exe', 'clice.exe', 'clang++.exe', 'clang.exe') {
+            $key = "$wer\LocalDumps\$exe"
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value 'D:\bench-out\dumps' -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+            New-ItemProperty -Path $key -Name DumpCount -PropertyType DWord -Value 20 -Force | Out-Null
+          }
+          "BENCH_STARTED=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $mem = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)
+          @{ cpu = $cpu.Name; cores = $cpu.NumberOfCores; threads = $cpu.NumberOfLogicalProcessors; memoryGB = $mem } |
+            ConvertTo-Json | Out-File D:\bench-out\runner.json -Encoding utf8
+
+      - name: Install xlings
+        shell: pwsh
+        run: |
+          irm https://raw.githubusercontent.com/openxlings/xlings/main/tools/other/quick_install.ps1 | iex
+          "$env:USERPROFILE\.xlings\subos\current\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$env:USERPROFILE\.xlings\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install mcpp (.xlings.json)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            xlings update > /dev/null 2>&1 || true
+            if xlings install -y; then break; fi
+            [ "$attempt" = 3 ] && { echo "::error::xlings install failed"; exit 1; }
+            sleep 30
+          done
+          mcpp --version
+          mcpp self config --mirror GLOBAL
+          python -m pip install -q psutil
+
+      # The caches the issue-23 probe saved on its branch (this pull request's base).
+      - name: Restore mcpp packages
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.mcpp/registry/data/xpkgs
+          key: probe2-mcpp-xpkgs-${{ hashFiles('.xlings.json', 'mcpp.toml', 'mcpp-build-scripts/*/mcpp.toml') }}
+          restore-keys: probe2-mcpp-xpkgs-
+
+      - name: Restore vcpkg binaries
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/AppData/Local/vcpkg/archives
+            ~/AppData/Local/vcpkg/downloads
+            ~/AppData/Local/vcpkg/registries
+          key: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-${{ github.run_id }}
+          restore-keys: probe2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-scripts/**') }}-
+
+      # The real build: the reference for what compiles (the bench files are part of the library), and the generated
+      # files the editors read.
+      - name: mcpp build --workspace (fast-release)
+        continue-on-error: true
+        timeout-minutes: 150
+        run: |
+          set +e
+          mkdir -p "$OUT/build"; start=$SECONDS
+          mcpp build --workspace --profile fast-release > "$OUT/build/build.log" 2>&1
+          code=$?
+          tail -n 30 "$OUT/build/build.log"
+          python - "$OUT/build" $code $((SECONDS - start)) <<'EOF'
+          import json, re, sys, pathlib
+          out, code, seconds = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+          log = (out / "build.log").read_text(encoding="utf-8", errors="replace")
+          bench = {}
+          for name in ("BenchH", "BenchM", "BenchMG", "BenchHX", "BenchX"):
+              errors = [l.strip()[:240] for l in log.splitlines() if f"{name}.cpp" in l and "error" in l.lower()]
+              bench[name] = {"errors": len(errors), "first": errors[:3]}
+          (out / "summary.json").write_text(json.dumps({"exitCode": code, "seconds": seconds, "bench": bench,
+              "errorLines": [l.strip()[:240] for l in log.splitlines() if " error: " in l][:12]}, indent=1), encoding="utf-8")
+          EOF
+          cat "$OUT/build/summary.json"
+          exit 0
+
+      - name: mcpp-language-server 0.0.14 (its payload; its clangd)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /c/mcppls && cd /c/mcppls
+          run="$MCPPLS_RUN"; [ "${{ matrix.engine }}" = next ] && run="$MCPPLS_NEXT_RUN"
+          gh run download "$run" -R Sunrisepeak/mcpp-language-server -n payload-win32-x64 -D .
+          tar -xzf payload-win32-x64.tar.gz
+          payload=$(cd "$(dirname "$(find . -name mcppls.exe | head -1)")/.." && pwd -W)
+          echo "PAYLOAD=$payload" >> "$GITHUB_ENV"
+          echo "MCPPLS=$payload/bin/mcppls.exe" >> "$GITHUB_ENV"
+          echo "CLANGD=$payload/clangd/bin/clangd.exe" >> "$GITHUB_ENV"
+          "$payload/bin/mcppls.exe" --version
+          "$payload/clangd/bin/clangd.exe" --version
+
+      # The sessions read the profile the build made (its generated files are on disk).
+      - name: The engine database (mcppls model --export engine)
+        continue-on-error: ${{ matrix.engine == 'mcppls' || matrix.engine == 'next' || matrix.engine == 'mcxx' }}
+        run: |
+          set -euo pipefail
+          sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
+          mkdir -p D:/bench/cdb
+          python "$BENCH" cdb --mcppls "$MCPPLS" --payload "$PAYLOAD" --root "$(pwd -W)" --out D:/bench/cdb/compile_commands.json
+          cp D:/bench/cdb/cdb-stats.json "$OUT/cdb-stats.json"
+          head -c 1500 "$OUT/cdb-stats.json"
+
+      - name: deep -- the compiler alone, then clangd --check
+        if: matrix.engine == 'deep'
+        timeout-minutes: 200
+        run: |
+          set +e
+          clang=$(find ~/.mcpp/registry/data/xpkgs/xim-x-llvm -name clang++.exe -path "*$LLVM_VERSION*/bin/*" | head -n 1)
+          [ -n "$clang" ] || clang=$(find ~/.mcpp/registry/data/xpkgs/xim-x-llvm -name clang++.exe -path '*/bin/*' | head -n 1)
+          echo "clang: $clang"; "$clang" --version | head -1
+          python "$BENCH" compile --clang "$clang" --cdb D:/bench/cdb/compile_commands.json --root "$(pwd -W)" \
+            --bmi-dir D:/bench/bmi --out "$OUT/deep/compile" --repeat 3
+          python "$BENCH" check --clangd "$CLANGD" --cdb-dir D:/bench/cdb --root "$(pwd -W)" --out "$OUT/deep/check"
+          exit 0
+
+      - name: clangd -- run directly on the database
+        if: matrix.engine == 'clangd'
+        timeout-minutes: 200
+        run: |
+          set +e
+          python "$BENCH" lsp --server clangd --exe "$CLANGD" --cdb D:/bench/cdb/compile_commands.json \
+            --root "$(pwd -W)" --cache D:/bench/cache-clangd --out "$OUT/clangd"
+          exit 0
+
+      - name: mcppls -- mcpp-language-server 0.0.14
+        if: matrix.engine == 'mcppls'
+        timeout-minutes: 200
+        run: |
+          set +e
+          python "$BENCH" lsp --server mcppls --exe "$MCPPLS" --payload "$PAYLOAD" --answers \
+            --root "$(pwd -W)" --cache D:/bench/cache-mcppls --out "$OUT/mcppls"
+          exit 0
+
+      - name: next -- the next mcpp-language-server
+        if: matrix.engine == 'next'
+        timeout-minutes: 200
+        run: |
+          set +e
+          python "$BENCH" lsp --server mcppls --exe "$MCPPLS" --payload "$PAYLOAD" --answers \
+            --root "$(pwd -W)" --cache D:/bench/cache-next --out "$OUT/next"
+          exit 0
+
+      - name: clice -- on the database
+        if: matrix.engine == 'clice'
+        timeout-minutes: 200
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mkdir -p /c/clice && cd /c/clice
+          gh run download "$CLICE_RUN" -R clice-io/clice -n package-clice.x86_64-w64-mingw32.zip -D .
+          for z in ./*.zip; do unzip -q -o "$z"; done
+          ls
+          exe=$(find /c/clice -name clice.exe -path '*/bin/*' | head -1)
+          "$exe" --version 2>&1 | head -2
+          cd "$GITHUB_WORKSPACE"
+          python "$BENCH" lsp --server clice --exe "$(cygpath -m "$exe")" --cdb D:/bench/cdb/compile_commands.json \
+            --root "$(pwd -W)" --cache D:/bench/cache-clice --out "$OUT/clice"
+          cp -r D:/bench/cache-clice/logs "$OUT/clice/clice-logs" 2>/dev/null
+          exit 0
+
+      - name: mcxx -- the mcxx engine (waits for its payload)
+        if: matrix.engine == 'mcxx'
+        timeout-minutes: 300
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mkdir -p /c/mcxx && cd /c/mcxx
+          for attempt in $(seq 1 50); do
+            run=$(gh api "repos/$MCXX_REPO/actions/artifacts?name=mcxx-release-win32-x64&per_page=5" \
+                  --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+            if [ -n "$run" ] && gh run download "$run" -R "$MCXX_REPO" -n mcxx-release-win32-x64 -D .; then
+              gh run view "$run" -R "$MCXX_REPO" --json headSha,headBranch,url > "$OUT/mcxx-run.json"; break
+            fi
+            echo "no mcxx-release-win32-x64 yet ($attempt)"; sleep 240
+          done
+          tar -xzf mcxx-win32-x64.tar.gz || { echo "::error::no mcxx payload"; exit 0; }
+          payload=$(cygpath -m /c/mcxx/payload)
+          "$payload/bin/mcppls.exe" --version
+          cd "$GITHUB_WORKSPACE"
+          python "$BENCH" lsp --server mcxx --exe "$payload/bin/mcppls.exe" --payload "$payload" \
+            --root "$(pwd -W)" --cache D:/bench/cache-mcxx --out "$OUT/mcxx"
+          exit 0
+
+      - name: Crash reports and the event log
+        if: always()
+        shell: pwsh
+        run: |
+          $since = [datetime]::Parse($env:BENCH_STARTED)
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', 'Application Hang' } |
+            Select-Object TimeCreated, ProviderName, Id, @{ n = 'Message'; e = { $_.Message.Substring(0, [math]::Min(600, $_.Message.Length)) } } |
+            ConvertTo-Json | Out-File D:\bench-out\application-events.json -Encoding utf8
+          Get-ChildItem D:\bench-out\dumps -ErrorAction SilentlyContinue | Select-Object Name, Length |
+            ConvertTo-Json | Out-File D:\bench-out\dumps.json -Encoding utf8
+          exit 0
+
+      # The job's own digest: a few small files, read where they were made.
+      - name: Digest
+        if: always()
+        run: |
+          python "$DIGEST" job --engine ${{ matrix.engine }} --in "$OUT" --out "$OUT/digest"
+          cat "$OUT/digest/${{ matrix.engine }}.md" >> "$GITHUB_STEP_SUMMARY"
+          ls -la "$OUT/digest"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.engine }}-digest
+          path: D:/bench-out/digest
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.engine }}-raw
+          path: |
+            D:/bench-out
+            !D:/bench-out/digest
+          retention-days: 7
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/engine-bench
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*-digest
+          path: digests
+      - name: The other run's digests (the jobs not run here)
+        if: inputs.merge_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p other
+          gh run download "${{ inputs.merge_run }}" -R "${{ github.repository }}" -p 'bench-*-digest' -D other || true
+          for d in other/bench-*-digest; do [ -e "digests/${d#other/}" ] || cp -r "$d" digests/; done
+          ls digests
+      # Again from the raw evidence of earlier runs, each one a sample, with this commit's digest.
+      - name: The earlier runs' evidence, digested again
+        if: inputs.redigest_runs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf digests && mkdir -p digests raw
+          # label=run, or label=run:engine,engine to take only those jobs of the run
+          for pair in ${{ inputs.redigest_runs }}; do
+            label=${pair%%=*}; rest=${pair#*=}; run=${rest%%:*}; only=""
+            [ "$rest" != "$run" ] && only=",${rest#*:},"
+            gh run download "$run" -R "${{ github.repository }}" -p 'bench-*-raw' -D "raw/$label" || true
+            for d in raw/$label/bench-*-raw; do
+              [ -d "$d" ] || continue
+              engine=${d#raw/$label/bench-}; engine=${engine%-raw}
+              [ -z "$only" ] || [[ "$only" == *",$engine,"* ]] || continue
+              python3 .github/engine-bench/digest.py job --engine "$engine" --in "$d" --out "digests/$label/bench-$engine-digest" || true
+            done
+          done
+          find digests -name '*.json' | sort
+      - name: Report
+        run: |
+          python3 .github/engine-bench/digest.py report --in digests --out report
+          cat report/report.md >> "$GITHUB_STEP_SUMMARY"
+          ls -la report
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-bench-report
+          path: report
+          retention-days: 14
+      # The same files one artifact each, so one table is fetched without the rest.
+      - uses: actions/upload-artifact@v4
+        with: { name: report-summary, path: report/report.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-answers, path: report/answers.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-typing, path: report/typing.md, retention-days: 14, if-no-files-found: ignore }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-stability, path: report/stability.md, retention-days: 14 }
+      - uses: actions/upload-artifact@v4
+        with: { name: report-logs, path: report/logs.md, retention-days: 14 }
