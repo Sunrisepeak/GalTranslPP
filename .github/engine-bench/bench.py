@@ -661,10 +661,20 @@ def lsp(args):
 # ---------------------------------------------------------------------------------------------- the engine database
 
 def cdb(args):
-    """mcppls model --export engine: the database mcppls gives clangd (every unit, std's too), without module hints."""
+    """mcppls model --export engine: the database mcppls gives clangd (every unit, std's too), without module hints.
+    mcpp's own build database is made first, with no time limit (the command line gives mcpp 60 s, which a cold
+    `mcpp emit build-database` of this project does not make), and handed to mcppls with --database."""
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    done = subprocess.run([args.mcppls, "model", "--root", args.root, "--export", "engine", "--payload", args.payload],
+    started = time.monotonic()
+    emitted = subprocess.run(["mcpp", "emit", "build-database", "--format", "json"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", cwd=args.root, timeout=3600, shell=sys.platform == "win32")
+    emit_seconds = round(time.monotonic() - started, 1)
+    database = pathlib.Path(args.root) / "bench-build-database.json"     # relative to the root, as --database is read
+    database.write_text(emitted.stdout, encoding="utf-8")
+    print(json.dumps({"emitExit": emitted.returncode, "emitSeconds": emit_seconds, "bytes": len(emitted.stdout), "stderr": emitted.stderr[-600:]}))
+    done = subprocess.run([args.mcppls, "model", "--root", args.root, "--export", "engine", "--payload", args.payload,
+                           "--database", database.name],
                           capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=args.root, timeout=1800)
     if done.returncode != 0:
         print(done.stderr[-4000:])
@@ -675,11 +685,19 @@ def cdb(args):
         entry["arguments"] = [a for a in arguments if not a.startswith(("-fmodule-file=", "-fmodule-output="))]
     out.write_text(json.dumps(entries, indent=1), encoding="utf-8")
     files = [e["file"].replace("\\", "/") for e in entries]
-    write_json(out.parent / "cdb-stats.json", {"entries": len(entries), "bench": [f for f in files if "/bench/" in f],
+    flagged = [e for e in entries if any(a.startswith(("-I", "-isystem", "/I")) for a in e.get("arguments") or [])]
+    write_json(out.parent / "cdb-stats.json", {"entries": len(entries), "withIncludeDirectories": len(flagged),
+                                                "emitExit": emitted.returncode, "emitSeconds": emit_seconds,
+                                                "benchCommand": next((e["arguments"] for e in entries if e["file"].replace("\\", "/").endswith("bench/BenchX.cpp")), None),
+                                                "bench": [f for f in files if "/bench/" in f],
                                                 "std": [f for f in files if re.search(r"/std(\.compat)?\.(ixx|cppm)$", f)],
                                                 "moduleUnits": sum(1 for e in entries if "c++-module" in (e.get("arguments") or [])),
                                                 "stderrTail": done.stderr[-1500:]})
-    print(json.dumps({"entries": len(entries)}))
+    print(json.dumps({"entries": len(entries), "withIncludeDirectories": len(flagged)}))
+    if len(flagged) < len(entries) // 2:
+        print("::error::the engine database has no include directories: mcppls did not read mcpp's build database")
+        print(done.stderr[-3000:])
+        return 1
     return 0
 
 

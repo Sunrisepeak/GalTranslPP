@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: engine-bench-${{ github.ref }}
+  group: engine-bench-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 env:
@@ -202,7 +202,9 @@ jobs:
         run: |
           set +e
           mkdir -p /c/clice && cd /c/clice
-          gh run download "$CLICE_RUN" -R clice-io/clice -n package-clice.x86_64-w64-mingw32.zip -D . && unzip -q -o ./*.zip
+          gh run download "$CLICE_RUN" -R clice-io/clice -n package-clice.x86_64-w64-mingw32.zip -D .
+          for z in ./*.zip; do unzip -q -o "$z"; done
+          ls
           exe=$(find /c/clice -name clice.exe -path '*/bin/*' | head -1)
           "$exe" --version 2>&1 | head -2
           cd "$GITHUB_WORKSPACE"
