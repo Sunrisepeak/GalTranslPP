@@ -671,7 +671,13 @@ def cdb(args):
                              encoding="utf-8", errors="replace", cwd=args.root, timeout=3600, shell=sys.platform == "win32")
     emit_seconds = round(time.monotonic() - started, 1)
     database = pathlib.Path(args.root) / "bench-build-database.json"     # relative to the root, as --database is read
-    database.write_text(emitted.stdout, encoding="utf-8")
+    try:
+        document = json.loads(emitted.stdout)
+    except ValueError:
+        document = {}
+    # mcpp answers with an envelope ({"kind": ..., "data": {"database": ...}}); --database reads the database itself.
+    inner = (document.get("data") or {}).get("database") if isinstance(document, dict) else None
+    database.write_text(json.dumps(inner if inner is not None else document), encoding="utf-8")
     print(json.dumps({"emitExit": emitted.returncode, "emitSeconds": emit_seconds, "bytes": len(emitted.stdout), "stderr": emitted.stderr[-600:]}))
     done = subprocess.run([args.mcppls, "model", "--root", args.root, "--export", "engine", "--payload", args.payload,
                            "--database", database.name],

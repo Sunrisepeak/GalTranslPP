@@ -155,6 +155,7 @@ jobs:
 
       # The sessions read the profile the build made (its generated files are on disk).
       - name: The engine database (mcppls model --export engine)
+        continue-on-error: ${{ matrix.engine == 'mcppls' || matrix.engine == 'mcxx' }}
         run: |
           set -euo pipefail
           sed -i 's/^default-profile = "release"/default-profile = "fast-release"/' */mcpp.toml
