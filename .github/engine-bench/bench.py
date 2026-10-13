@@ -89,6 +89,14 @@ def uri_of(path):
     return pathlib.Path(path).resolve().as_uri()
 
 
+def same_uri(uri):
+    """The key a document's URI is kept under: servers spell the same file differently (clice: `file:///d%3A/...`
+    or a lower-case drive; clangd: `file:///D:/...`), and Windows paths are case-insensitive."""
+    from urllib.parse import unquote
+    key = unquote(uri or "")
+    return key.lower() if sys.platform == "win32" else key
+
+
 def pct(values, p):
     if not values:
         return None
@@ -179,8 +187,8 @@ class Client:
         params = message.get("params") or {}
         self.methods[method] += 1
         if method == "textDocument/publishDiagnostics":
-            self.diagnostics[params.get("uri")] = params.get("diagnostics") or []
-            self.published[params.get("uri")].append(self.t())
+            self.diagnostics[same_uri(params.get("uri"))] = params.get("diagnostics") or []
+            self.published[same_uri(params.get("uri"))].append(self.t())
         elif method == "cxxModules/status":
             state = params.get("state")
             if not self.status or self.status[-1][1] != state:
@@ -471,7 +479,7 @@ def stats(rows):
 def diagnostics_of(client, files):
     result = {}
     for rel in files:
-        uri = uri_of(pathlib.Path(rel).resolve())
+        uri = same_uri(uri_of(pathlib.Path(rel).resolve()))
         items = client.diagnostics.get(uri)
         errors = [d for d in items or [] if d.get("severity", 1) == 1]
         result[rel] = {"published": items is not None, "times": client.published.get(uri, [])[:3] + client.published.get(uri, [])[-2:],
@@ -517,7 +525,7 @@ def editor_requests(client, files):
 def settle(client, tree, files, texts, rows, max_wait, quiet, probe_gap):
     """Until every file has diagnostics and the server has been quiet (no new diagnostics, little CPU) for `quiet` s.
     While it prepares, a few requests every `probe_gap` s: when do they first answer, and answer right."""
-    uris = [uri_of(pathlib.Path(rel).resolve()) for rel in files]
+    uris = [same_uri(uri_of(pathlib.Path(rel).resolve())) for rel in files]
     started = now()
     next_probe = 0.0
     first_right = {}
@@ -544,6 +552,7 @@ def typing(client, rel, text, anchor, line, asks, seconds_per_char, out_rows):
     and at a word's first letter, the pending one cancelled); after the line, how long until diagnostics come."""
     path = pathlib.Path(rel).resolve()
     doc = uri_of(path)
+    doc_key = same_uri(doc)
     at = text.find(anchor)
     if at < 0:
         out_rows.append({"file": rel, "status": "no-anchor"})
@@ -607,11 +616,11 @@ def typing(client, rel, text, anchor, line, asks, seconds_per_char, out_rows):
     # Diagnostics for the text as it is now.
     deadline = now() + 90
     while now() < deadline and not client.closed.is_set():
-        if any(t >= typed_at for t in client.published.get(doc, [])):
+        if any(t >= typed_at for t in client.published.get(doc_key, [])):
             break
         time.sleep(0.2)
-    after = [t for t in client.published.get(doc, []) if t >= typed_at]
-    items = client.diagnostics.get(doc) or []
+    after = [t for t in client.published.get(doc_key, []) if t >= typed_at]
+    items = client.diagnostics.get(doc_key) or []
     out_rows.append({"file": rel, "kind": "diagnostics-after-line", "seconds": round(after[0] - typed_at, 2) if after else None,
                      "errors": sum(1 for d in items if d.get("severity", 1) == 1)})
     change(text)   # put the line back
