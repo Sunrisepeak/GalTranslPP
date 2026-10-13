@@ -339,145 +339,136 @@ def job(args):
 
 # ---------------------------------------------------------------------------------------------- the report
 
+def samples_of(base):
+    """{engine: [(sample, digest)]}: base/bench-*-digest (one sample) or base/<sample>/bench-*-digest (several)."""
+    data = collections.defaultdict(list)
+    for path in sorted(base.glob("bench-*-digest/*.json")) + sorted(base.glob("*/bench-*-digest/*.json")):
+        d = load(path)
+        if d and d.get("engine"):
+            sample = path.parent.parent.name if path.parent.parent != base else ""
+            data[d["engine"]].append((sample, d))
+    return data
+
+
+def cell(entries, get):
+    values = []
+    for _, d in entries:
+        try:
+            values.append(get(d))
+        except (KeyError, TypeError, AttributeError):
+            values.append("—")
+    return " · ".join(values) if values else "—"
+
+
+def fget(d, run, name):
+    return (((d.get(run) or {}).get("files") or {}).get(name)) or {}
+
+
 def report(args):
     base = pathlib.Path(args.inp)
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    data = {}
-    for path in base.glob("bench-*-digest/*.json"):
-        d = load(path)
-        if d and d.get("engine"):
-            data[d["engine"]] = d
+    data = samples_of(base)
     engines = [e for e in ENGINES if e in data]
+    labels = sorted({s for entries in data.values() for s, _ in entries})
     md = ["# Engine bench on GalTranslPP (Windows)", "",
           "Five ways to reach the same libraries (one function body), five of the project's own heavy files; each server with "
           "the same files open, the same requests at the same points, the same typing. Times are seconds; `(a/b)` is answers "
-          "that were right of those asked.", ""]
-    for e in engines:
-        b = data[e].get("build") or {}
-        md.append(f"- **{e}**: runner {(data[e].get('runner') or {}).get('cpu')}, build exit {b.get('exitCode')} ({b.get('seconds')} s)")
+          "that were right of those asked; `x · y` are the samples " + (", ".join(labels) if any(labels) else "(one)") + ".", ""]
+    for e in engines + (["deep"] if "deep" in data else []):
+        md.append(f"- **{e}**: " + "; ".join(f"{s or 'run'}: {(d.get('runner') or {}).get('cpu', '').strip()}, build {(d.get('build') or {}).get('seconds')} s"
+                                            for s, d in data[e]))
     md.append("")
+    names_bench = BENCH + ["NormalJsonTranslator.Run.cpp"]
     if engines:
-        md += ["## Cold start: when each file first shows diagnostics, and errors shown (the project builds: every error is false)", "",
-               "| file | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-        names = BENCH + ["NormalJsonTranslator.Run.cpp", "NormalJsonTranslator.Core.cpp", "NormalJsonTranslator.TransAgent.cpp",
-                         "NormalJsonTranslator.ixx", "Tool.ixx"]
-        for name in names:
-            cells = []
-            for e in engines:
-                f = ((data[e].get("cold") or {}).get("files") or {}).get(name) or {}
-                cells.append(f"{fmt(f.get('firstDiagnostics'))}, {f.get('errors')} err" if f else "—")
-            md.append(f"| {VARIANT.get(name, name)} | " + " | ".join(cells) + " |")
-        md += ["", "| | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-        for label, get in (("settled after (cold)", lambda r: fmt(r.get("settledAfter")) + ("" if r.get("settled") else " (not)")),
-                           ("settled after (warm)", None),
-                           ("peak memory MB (cold)", lambda r: fmt((r.get("tree") or {}).get("peakRssMB"), "")),
-                           ("peak private MB (cold)", lambda r: fmt((r.get("tree") or {}).get("peakPrivateMB"), "")),
-                           ("CPU core-seconds (cold)", lambda r: fmt((r.get("tree") or {}).get("cpuCoreSeconds"), "")),
-                           ("processes started (cold)", lambda r: str((r.get("tree") or {}).get("started"))),
-                           ("died early (cold / warm)", None)):
-            cells = []
-            for e in engines:
-                cold, warm = data[e].get("cold") or {}, data[e].get("warm") or {}
-                if label.startswith("settled after (warm)"):
-                    cells.append(fmt(warm.get("settledAfter")) + ("" if warm.get("settled") else " (not)") if warm else "—")
-                elif label.startswith("died"):
-                    cells.append(f"{(cold.get('end') or {}).get('diedEarly')} / {(warm.get('end') or {}).get('diedEarly')}")
-                else:
-                    cells.append(get(cold) if cold else "—")
-            md.append(f"| {label} | " + " | ".join(cells) + " |")
-        md += ["", "## Once prepared (idle): completion p50 / p95 (right), per file", "",
-               "| file | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-        for name in BENCH + ["NormalJsonTranslator.Run.cpp"]:
-            cells = []
-            for e in engines:
-                c = ((((data[e].get("cold") or {}).get("files") or {}).get(name) or {}).get("completion")) or {}
-                cells.append(f"{fmt(c.get('p50'))} / {fmt(c.get('p95'))} ({c.get('right', 0)}/{c.get('n', 0)})" if c else "—")
-            md.append(f"| {VARIANT.get(name, name)} | " + " | ".join(cells) + " |")
-        md += ["", "Hover and definition p50 (right):", "", "| file | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-        for name in BENCH + ["NormalJsonTranslator.Run.cpp"]:
-            cells = []
-            for e in engines:
-                f = (((data[e].get("cold") or {}).get("files") or {}).get(name) or {})
-                h, d = f.get("hover") or {}, f.get("definition") or {}
-                cells.append(f"{fmt(h.get('p50'))} ({h.get('right', 0)}/{h.get('n', 0)}); {fmt(d.get('p50'))} ({d.get('right', 0)}/{d.get('n', 0)})" if f else "—")
-            md.append(f"| {VARIANT.get(name, name)} | " + " | ".join(cells) + " |")
-        md += ["", "## Warm start (second start, same cache): first diagnostics and completion p50", "",
-               "| file | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-        for name in BENCH + ["NormalJsonTranslator.Run.cpp"]:
-            cells = []
-            for e in engines:
-                f = (((data[e].get("warm") or {}).get("files") or {}).get(name) or {})
-                cells.append(f"{fmt(f.get('firstDiagnostics'))}; {fmt((f.get('completion') or {}).get('p50'))}" if f else "—")
-            md.append(f"| {VARIANT.get(name, name)} | " + " | ".join(cells) + " |")
+        def table(title, names, get, note=None):
+            rows = [f"## {title}", ""] + ([note, ""] if note else []) + ["| file | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
+            for name in names:
+                rows.append(f"| {VARIANT.get(name, name)} | " + " | ".join(cell(data[e], lambda d: get(d, name)) for e in engines) + " |")
+            return rows + [""]
+
+        def comp(d, run, name):
+            c = fget(d, run, name).get("completion") or {}
+            return f"{fmt(c.get('p50'))} ({c.get('right', 0)}/{c.get('n', 0)})" if c.get("n") else "—"
+        md += table("Once prepared (idle): completion p50 (right)", names_bench, lambda d, n: comp(d, "cold", n))
+        md += table("Once prepared: hover p50 (right) / definition p50 (right)", names_bench,
+                    lambda d, n: (lambda f: f"{fmt((f.get('hover') or {}).get('p50'))} ({(f.get('hover') or {}).get('right', 0)}/{(f.get('hover') or {}).get('n', 0)}) / "
+                                            f"{fmt((f.get('definition') or {}).get('p50'))} ({(f.get('definition') or {}).get('right', 0)}/{(f.get('definition') or {}).get('n', 0)})")(fget(d, "cold", n)))
+        md += table("Cold start: the first right completion while it prepares (asked every 20 s)",
+                    ["BenchH", "BenchX", "NormalJsonTranslator.Run.cpp"],
+                    lambda d, n: fmt((fget(d, "cold", n).get("preparing") or {}).get("firstRight")),
+                    "The one measure every server shares: some publish an empty first diagnostics at once (mcppls), some only when asked (clice).")
+        md += table("Cold start: first semantic tokens / errors shown (the project builds, so every error is false)",
+                    BENCH + ["NormalJsonTranslator.Run.cpp", "NormalJsonTranslator.Core.cpp", "NormalJsonTranslator.TransAgent.cpp", "NormalJsonTranslator.ixx", "Tool.ixx"],
+                    lambda d, n: (lambda f: f"{fmt(f.get('semanticTokens')) if not isinstance(f.get('semanticTokens'), str) else f.get('semanticTokens')} / {f.get('errors')}")(fget(d, "cold", n)))
+        md += table("Warm start (same cache): the first right completion; completion p50 once prepared",
+                    ["BenchH", "BenchX", "NormalJsonTranslator.Run.cpp"],
+                    lambda d, n: f"{fmt((fget(d, 'warm', n).get('preparing') or {}).get('firstRight'))}; {comp(d, 'warm', n)}")
+        md += table("Typing: completion p50 / p95, member completions right, diagnostics after the line",
+                    ["BenchH", "BenchM", "BenchHX", "BenchX", "NormalJsonTranslator.Run.cpp"],
+                    lambda d, n: (lambda t: f"{fmt(t.get('p50'))} / {fmt(t.get('p95'))}, {t.get('memberRight')}, "
+                                            f"{'+'.join(fmt(x) for x in t.get('diagnosticsAfterLine') or [])}" if t else "—")(((d.get("cold") or {}).get("typing") or {}).get(n) or {}))
+        md += ["## The server as a whole", "", "| | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
+        for label, get in (
+                ("settled (cold), s", lambda d: fmt((d.get("cold") or {}).get("settledAfter"), "") + ("" if (d.get("cold") or {}).get("settled") else " not")),
+                ("settled (warm), s", lambda d: fmt((d.get("warm") or {}).get("settledAfter"), "") + ("" if (d.get("warm") or {}).get("settled") else " not")),
+                ("peak memory, MB (cold / warm)", lambda d: f"{((d.get('cold') or {}).get('tree') or {}).get('peakRssMB')} / {((d.get('warm') or {}).get('tree') or {}).get('peakRssMB')}"),
+                ("CPU, core-seconds (cold)", lambda d: fmt(((d.get("cold") or {}).get("tree") or {}).get("cpuCoreSeconds"), "", 0)),
+                ("engine processes started (cold)", lambda d: str({k: v for k, v in (((d.get("cold") or {}).get("tree") or {}).get("started") or {}).items()
+                                                                   if k.lower().split(".")[0] in ("clangd", "clice", "mcppls")})),
+                ("died before the end (cold / warm)", lambda d: f"{((d.get('cold') or {}).get('end') or {}).get('diedEarly')} / {((d.get('warm') or {}).get('end') or {}).get('diedEarly')}")):
+            md.append(f"| {label} | " + " | ".join(cell(data[e], get) for e in engines) + " |")
+        md.append("")
     if "deep" in data:
-        md += ["", "## Headers against modules, below the editor", ""] + deep_markdown(data["deep"]["deep"])
+        for sample, d in data["deep"]:
+            md += ["", f"## Headers against modules, below the editor {('(' + sample + ')') if sample else ''}", ""] + deep_markdown(d["deep"])
     (out / "report.md").write_text("\n".join(md) + "\n", encoding="utf-8")
 
-    hvm = ["# Headers against modules, per engine", "",
-           "The same body; H and M reach the same three libraries and the standard library, HX and X add the platform "
-           "headers NormalJsonTranslator.Run.cpp includes. Idle completion p50 (right) and the cold first diagnostics.", "",
-           "| engine | " + " | ".join(VARIANT[b] for b in BENCH) + " |", "|---|" + "---|" * len(BENCH)]
+    hvm = ["# Headers against modules, per engine, per point", "",
+           "The same body; H and M reach the same three libraries and the standard library, HX and X add the platform headers "
+           "NormalJsonTranslator.Run.cpp includes. Idle p50 (right).", ""]
     for e in engines:
-        cells = []
-        for b in BENCH:
-            f = (((data[e].get("cold") or {}).get("files") or {}).get(b) or {})
-            c = f.get("completion") or {}
-            cells.append(f"{fmt(c.get('p50'))} ({c.get('right', 0)}/{c.get('n', 0)}); diag {fmt(f.get('firstDiagnostics'))}" if f else "—")
-        hvm.append(f"| {e} | " + " | ".join(cells) + " |")
-    hvm += ["", "Per point (idle p50, right):", ""]
-    for e in engines:
-        hvm += [f"### {e}", "", "| point | " + " | ".join(BENCH) + " |", "|---|" + "---|" * len(BENCH)]
-        points = []
-        for b in BENCH:
-            for p in ((((data[e].get("cold") or {}).get("files") or {}).get(b) or {}).get("points") or {}):
-                if p not in points:
-                    points.append(p)
-        for p in points:
-            cells = []
+        for sample, d in data[e]:
+            hvm += [f"## {e} {sample}", "", "| point | " + " | ".join(BENCH) + " |", "|---|" + "---|" * len(BENCH)]
+            points = []
             for b in BENCH:
-                x = (((((data[e].get("cold") or {}).get("files") or {}).get(b) or {}).get("points") or {}).get(p)) or {}
-                cells.append(f"{fmt(x.get('p50'))} ({x.get('right', '—')})" if x else "—")
-            hvm.append(f"| {p} | " + " | ".join(cells) + " |")
-        hvm.append("")
+                for p in fget(d, "cold", b).get("points") or {}:
+                    if p not in points:
+                        points.append(p)
+            for p in points:
+                cells = []
+                for b in BENCH:
+                    x = (fget(d, "cold", b).get("points") or {}).get(p) or {}
+                    cells.append(f"{fmt(x.get('p50'))} ({x.get('right', '—')})" if x else "—")
+                hvm.append(f"| {p} | " + " | ".join(cells) + " |")
+            hvm.append("")
     (out / "header-vs-modules.md").write_text("\n".join(hvm) + "\n", encoding="utf-8")
 
-    typing = ["# Typing", ""]
-    for e in engines:
-        typing += [f"## {e}", ""] + [l for l in lsp_markdown(e, {"cold": {**(data[e].get("cold") or {}), "files": {}}})
-                                     if l.startswith("|") or l.startswith("Typing")]
-        typing.append("")
-    (out / "typing.md").write_text("\n".join(typing) + "\n", encoding="utf-8")
-
-    stab = ["# Stability", "", "| engine | died early (cold/warm) | exit codes | processes started / exited | request failures (idle) | crash lines in logs | error lines | dumps | error events |",
-            "|---|---|---|---|---|---|---|---|---|"]
-    for e in list(engines) + (["deep"] if "deep" in data else []):
-        d = data[e]
-        cold, warm = d.get("cold") or {}, d.get("warm") or {}
-        failures = collections.Counter()
-        for r in (cold, warm):
-            for f in (r.get("files") or {}).values():
-                for method in ("completion", "hover", "definition"):
-                    failures.update((f.get(method) or {}).get("failed") or {})
-        crash = sum((v.get("counts") or {}).get("crash", 0) for v in (d.get("logs") or {}).values())
-        errors = sum((v.get("counts") or {}).get("error", 0) for v in (d.get("logs") or {}).values())
-        dumps = d.get("dumps")
-        events = d.get("events")
-        stab.append(f"| {e} | {(cold.get('end') or {}).get('diedEarly')}/{(warm.get('end') or {}).get('diedEarly')} | "
-                    f"{(cold.get('end') or {}).get('exitCode')}/{(warm.get('end') or {}).get('exitCode')} | "
-                    f"{(cold.get('tree') or {}).get('started')} / {(cold.get('tree') or {}).get('exited')} | {dict(failures)} | {crash} | {errors} | "
-                    f"{len(dumps) if isinstance(dumps, list) else (1 if dumps else 0)} | {len(events) if isinstance(events, list) else (1 if events else 0)} |")
+    stab = ["# Stability", "", "| engine | sample | died early (cold/warm) | exit codes | processes started / exited | request failures | crash lines | error lines | dumps | error events |",
+            "|---|---|---|---|---|---|---|---|---|---|"]
+    for e in engines + (["deep"] if "deep" in data else []):
+        for sample, d in data[e]:
+            cold, warm = d.get("cold") or {}, d.get("warm") or {}
+            failures = collections.Counter()
+            for r in (cold, warm):
+                for f in (r.get("files") or {}).values():
+                    for method in ("completion", "hover", "definition"):
+                        failures.update((f.get(method) or {}).get("failed") or {})
+            crash = sum((v.get("counts") or {}).get("crash", 0) for v in (d.get("logs") or {}).values())
+            errors = sum((v.get("counts") or {}).get("error", 0) for v in (d.get("logs") or {}).values())
+            dumps, events = d.get("dumps"), d.get("events")
+            stab.append(f"| {e} | {sample} | {(cold.get('end') or {}).get('diedEarly')}/{(warm.get('end') or {}).get('diedEarly')} | "
+                        f"{(cold.get('end') or {}).get('exitCode')}/{(warm.get('end') or {}).get('exitCode')} | "
+                        f"{(cold.get('tree') or {}).get('started')} / {(cold.get('tree') or {}).get('exited')} | {dict(failures)} | {crash} | {errors} | "
+                        f"{len(dumps) if isinstance(dumps, list) else (1 if dumps else 0)} | {len(events) if isinstance(events, list) else (1 if events else 0)} |")
     (out / "stability.md").write_text("\n".join(stab) + "\n", encoding="utf-8")
 
-    logs = []
-    for path in sorted(base.glob("bench-*-digest/*-logs.md")):
-        logs.append(path.read_text(encoding="utf-8"))
+    logs = [path.read_text(encoding="utf-8") for path in sorted(base.glob("**/bench-*-digest/*-logs.md"))]
     (out / "logs.md").write_text("\n".join(logs), encoding="utf-8")
-    for path in sorted(base.glob("bench-*-digest/*.md")):
+    for path in sorted(base.glob("**/bench-*-digest/*.md")):
         if not path.name.endswith("-logs.md"):
-            (out / f"engine-{path.name}").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    (out / "data.json").write_text(json.dumps({e: {k: v for k, v in d.items() if k != "logs"} for e, d in data.items()},
-                                              ensure_ascii=False, indent=1), encoding="utf-8")
+            sample = path.parent.parent.name if path.parent.parent != base else ""
+            (out / f"engine-{(sample + '-') if sample else ''}{path.name}").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     return 0
 
 

@@ -25,6 +25,9 @@ on:
       merge_run:
         description: A run of this workflow whose job digests the report takes too (for the jobs not run here)
         default: ''
+      redigest_runs:
+        description: 'Only the report: digest these runs'' raw evidence again, as samples ("A=<run id> B=<run id>")'
+        default: ''
 
 concurrency:
   group: engine-bench-${{ github.ref }}-${{ github.sha }}
@@ -49,6 +52,7 @@ env:
 jobs:
   bench:
     name: ${{ matrix.engine }}
+    if: inputs.redigest_runs == '' || inputs.redigest_runs == null
     runs-on: windows-2025
     timeout-minutes: 355
     strategy:
@@ -305,6 +309,23 @@ jobs:
           gh run download "${{ inputs.merge_run }}" -R "${{ github.repository }}" -p 'bench-*-digest' -D other || true
           for d in other/bench-*-digest; do [ -e "digests/${d#other/}" ] || cp -r "$d" digests/; done
           ls digests
+      # Again from the raw evidence of earlier runs, each one a sample, with this commit's digest.
+      - name: The earlier runs' evidence, digested again
+        if: inputs.redigest_runs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf digests && mkdir -p digests raw
+          for pair in ${{ inputs.redigest_runs }}; do
+            label=${pair%%=*}; run=${pair#*=}
+            gh run download "$run" -R "${{ github.repository }}" -p 'bench-*-raw' -D "raw/$label" || true
+            for d in raw/$label/bench-*-raw; do
+              [ -d "$d" ] || continue
+              engine=${d#raw/$label/bench-}; engine=${engine%-raw}
+              python3 .github/engine-bench/digest.py job --engine "$engine" --in "$d" --out "digests/$label/bench-$engine-digest" || true
+            done
+          done
+          find digests -name '*.json' | sort
       - name: Report
         run: |
           python3 .github/engine-bench/digest.py report --in digests --out report
