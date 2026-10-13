@@ -45,8 +45,8 @@ env:
   OUT: D:/bench-out
   # mcpp-language-server 0.0.14: main's CI run of the released commit (payload-win32-x64).
   MCPPLS_RUN: '38318839114'
-  # The next mcpp-language-server: its pull request's CI run (payload-win32-x64; Sunrisepeak/mcpp-language-server#57 at ffab080).
-  MCPPLS_NEXT_RUN: '38393307399'
+  # The next mcpp-language-server: its pull request's CI run (payload-win32-x64; Sunrisepeak/mcpp-language-server#57 at 542d3c8).
+  MCPPLS_NEXT_RUN: '38398755091'
   # clice main (62218ec) built by its CI: the nightly v0.1.2026101209 (fb0fa5d) skips every .ixx entry of a database.
   CLICE_RUN: '38269140127'
   # The mcxx engine: the newest mcxx-release-win32-x64 artifact of speak-agent/mcpp-language-server
