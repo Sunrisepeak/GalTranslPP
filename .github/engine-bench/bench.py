@@ -606,13 +606,18 @@ def typing(client, rel, text, anchor, line, asks, seconds_per_char, out_rows):
                 if stripped.endswith(key):
                     expect = names
             complete(len(stripped), expect, trigger)
-        elif char.isalpha() and not (previous.isalnum() or previous == "_"):
+        elif char.isalpha() and not (previous.isalnum() or previous == "_" or previous in ".:>"):
+            # A word's first letter opens a session; after `.`, `::` or `->` the letters filter the session that
+            # character opened (VS Code asks again only for an incomplete list).
             complete(len(stripped), None, None)
         previous = char
         time.sleep(seconds_per_char)
     typed_at = client.t()
     for _, _, _, thread, _ in pending:
         thread.join(35)
+    # What VS Code asks of an edited file once the typing stops (servers that compile on request, clice, need it).
+    threading.Thread(target=client.request, args=("textDocument/semanticTokens/full", {"textDocument": {"uri": doc}}, 120),
+                     daemon=True).start()
     # Diagnostics for the text as it is now.
     deadline = now() + 90
     while now() < deadline and not client.closed.is_set():
